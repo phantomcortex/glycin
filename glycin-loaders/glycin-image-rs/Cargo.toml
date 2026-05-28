@@ -16,6 +16,7 @@ builtin = ["glycin-utils/builtin"]
 external = ["glycin-utils/external"]
 
 [dependencies]
+bcdec_rs.workspace = true
 glycin-utils = { workspace = true, features = [
     "async-io",
     "image-rs",
@@ -27,7 +28,6 @@ gufo.workspace = true
 gufo-jpeg = { workspace = true, features = ["encoder"] }
 image = { workspace = true, features = [
     "bmp",
-    "dds",
     "exr",
     "ff",
     "gif",

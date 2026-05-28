@@ -1,0 +1,116 @@
+name: Build Fedora 44 RPM
+
+on:
+  push:
+    branches: [main, fix-dds-bc7]
+    tags: ['v*', 'rpm-*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed to attach RPMs to a GitHub release on tag push
+
+jobs:
+  build-rpm:
+    name: Build glycin RPMs (Fedora 44)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y \
+            cargo \
+            rust \
+            gcc \
+            git-core \
+            meson \
+            ninja-build \
+            rpm-build \
+            rpmdevtools \
+            rsync \
+            vala \
+            pkgconfig \
+            gobject-introspection-devel \
+            gtk4-devel \
+            libheif-devel \
+            libjxl-devel \
+            librsvg2-devel \
+            lcms2-devel \
+            libseccomp-devel
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure git for the container
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Compute version-release suffix
+        id: vr
+        run: |
+          # Derive a short revision tag so successive builds sort correctly.
+          # Tag pushes (`rpm-*`, `v*`) use a fixed suffix; everything else
+          # uses the build number to make each artifact unique.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            REV="$(echo "${GITHUB_REF#refs/tags/}" | sed 's/[^0-9A-Za-z]/_/g')"
+          else
+            REV="gh${GITHUB_RUN_NUMBER}.$(git rev-parse --short HEAD)"
+          fi
+          echo "rev=${REV}" >> "$GITHUB_OUTPUT"
+          echo "Computed suffix: ${REV}"
+
+      - name: Set up rpmbuild tree
+        run: |
+          rpmdev-setuptree
+
+      - name: Stage source tarball
+        run: |
+          NAME=glycin
+          VERSION=$(grep -E '^Version:' build-aux/glycin.spec | awk '{print $2}')
+          WORK="/tmp/${NAME}-${VERSION}"
+          mkdir -p "$WORK"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='target' \
+            --exclude='install-prefix' \
+            --exclude='_build' \
+            --exclude='dist' \
+            ./ "$WORK/"
+          tar -C /tmp -cJf "$HOME/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.xz" "${NAME}-${VERSION}"
+          ls -lh "$HOME/rpmbuild/SOURCES/"
+
+      - name: Copy spec into rpmbuild tree
+        run: cp build-aux/glycin.spec "$HOME/rpmbuild/SPECS/"
+
+      - name: Build RPMs
+        env:
+          # Make sure cargo can fetch crates while rpmbuild is running.
+          CARGO_NET_OFFLINE: "false"
+        run: |
+          rpmbuild \
+            --define "bc7fix_rev .${{ steps.vr.outputs.rev }}" \
+            -ba "$HOME/rpmbuild/SPECS/glycin.spec"
+
+      - name: Collect output RPMs
+        run: |
+          mkdir -p artifacts
+          cp -v "$HOME/rpmbuild/RPMS"/*/*.rpm artifacts/
+          cp -v "$HOME/rpmbuild/SRPMS"/*.rpm artifacts/ || true
+          ls -lh artifacts/
+
+      - name: Upload RPMs as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glycin-rpms-fedora44
+          path: artifacts/*.rpm
+          if-no-files-found: error
+
+      - name: Attach RPMs to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.rpm
+          fail_on_unmatched_files: true
