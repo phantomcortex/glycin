@@ -1,0 +1,133 @@
+name: Check upstream for new glycin release
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM_URL: https://gitlab.gnome.org/GNOME/glycin.git
+  # Branch the PR targets — also where build-aux/glycin.spec lives.
+  # Change this if/when the spec gets merged to a different branch.
+  TARGET_BRANCH: fix-dds-bc7
+
+jobs:
+  check:
+    name: Watch upstream tags and open PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine versions and PR branch
+        id: vers
+        run: |
+          set -euo pipefail
+
+          # Latest strict X.Y.Z upstream tag (filters out alpha/beta/rc and any
+          # non-strict-semver tags). Nothing else gets considered a release.
+          LATEST="$(git ls-remote --tags --refs "$UPSTREAM_URL" \
+            | awk -F/ '{print $NF}' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V \
+            | tail -n1)"
+
+          if [ -z "$LATEST" ]; then
+            echo "::error::Could not determine latest upstream tag from $UPSTREAM_URL"
+            exit 1
+          fi
+
+          if [ ! -f build-aux/glycin.spec ]; then
+            echo "::error::build-aux/glycin.spec not found on branch $TARGET_BRANCH"
+            exit 1
+          fi
+
+          CURRENT="$(awk '/^Version:/ {print $2; exit}' build-aux/glycin.spec)"
+          BRANCH="update-upstream/${LATEST}"
+
+          echo "latest=$LATEST"   | tee -a "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" | tee -a "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH"   | tee -a "$GITHUB_OUTPUT"
+
+          if [ "$LATEST" = "$CURRENT" ]; then
+            echo "needs_update=false" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "needs_update=true"  | tee -a "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if up to date
+        if: steps.vers.outputs.needs_update == 'false'
+        run: |
+          echo "Already at upstream ${{ steps.vers.outputs.latest }} — nothing to do."
+
+      - name: Check whether the update branch already exists
+        id: branch
+        if: steps.vers.outputs.needs_update == 'true'
+        run: |
+          if git ls-remote --heads origin "${{ steps.vers.outputs.branch }}" | grep -q .; then
+            echo "An update branch already exists; assume the PR is already open."
+            echo "skip=true" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create branch, bump spec Version, open PR
+        if: steps.vers.outputs.needs_update == 'true' && steps.branch.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.vers.outputs.latest }}
+          CURRENT: ${{ steps.vers.outputs.current }}
+          BRANCH: ${{ steps.vers.outputs.branch }}
+        run: |
+          set -euxo pipefail
+
+          git config user.name  "glycin-update-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+
+          # Bump Version: in the spec. Leave Release: alone so the build
+          # workflow's `bc7fix.gh<run>.<sha>` suffix continues to produce
+          # unique RPMs.
+          sed -i -E "s|^(Version:[[:space:]]*).*|\1$TAG|" build-aux/glycin.spec
+
+          # Verify the edit took
+          NEW_VER="$(awk '/^Version:/ {print $2; exit}' build-aux/glycin.spec)"
+          if [ "$NEW_VER" != "$TAG" ]; then
+            echo "::error::Spec Version did not update to $TAG (still '$NEW_VER')"
+            exit 1
+          fi
+
+          git add build-aux/glycin.spec
+          git commit -m "rpm: Bump Version to upstream $TAG"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base "$TARGET_BRANCH" \
+            --head "$BRANCH" \
+            --title "Bump to upstream glycin $TAG" \
+            --body "$(cat <<BODY
+          Automated bot: upstream released a new stable tag.
+
+          - Previous: \`$CURRENT\`
+          - New: \`$TAG\`
+          - Upstream NEWS: https://gitlab.gnome.org/GNOME/glycin/-/blob/$TAG/NEWS
+          - Upstream diff: https://gitlab.gnome.org/GNOME/glycin/-/compare/$CURRENT...$TAG
+
+          This PR only bumps \`Version:\` in \`build-aux/glycin.spec\`. Before merging:
+
+          1. Merge upstream \`$TAG\` into this branch (e.g. \`git fetch upstream && git merge $TAG\`) and resolve any conflicts with the DDS patch.
+          2. Re-test the build locally or trigger the RPM workflow.
+
+          Pre-release tags (\`*rc*\`, \`*beta*\`, \`*alpha*\`) are intentionally ignored — this bot only fires on strict \`X.Y.Z\`.
+          BODY
+          )"
