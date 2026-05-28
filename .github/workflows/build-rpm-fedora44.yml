@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write  # needed to attach RPMs to a GitHub release on tag push
+
 jobs:
   build-rpm:
     name: Build glycin RPMs (Fedora 44)
