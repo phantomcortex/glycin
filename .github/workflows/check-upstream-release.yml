@@ -14,7 +14,7 @@ env:
   UPSTREAM_URL: https://gitlab.gnome.org/GNOME/glycin.git
   # Branch the PR targets — also where build-aux/glycin.spec lives.
   # Change this if/when the spec gets merged to a different branch.
-  TARGET_BRANCH: fix-dds-bc7
+  TARGET_BRANCH: main
 
 jobs:
   check:
