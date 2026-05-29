@@ -6,6 +6,10 @@ on:
     tags: ['v*', 'rpm-*']
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - '**/README.md'
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
