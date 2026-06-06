@@ -36,6 +36,8 @@ loader.
 %package loaders
 Summary:        Sandboxed image rendering (image loading backends)
 Requires:       bubblewrap
+Obsoletes:      glycin-loaders < %{version}-%{release}
+Provides:       glycin-loaders = %{version}-%{release}
 
 %description loaders
 Sandboxed and extendable image decoding.
@@ -48,6 +50,8 @@ adds DDS BC4/BC5/BC6H/BC7 support to the image-rs loader.
 Summary:        Sandboxed image rendering (thumbnailer)
 Requires:       glycin-loaders%{_isa} = %{version}-%{release}
 Obsoletes:      gdk-pixbuf2 < 2.43.5-1
+Obsoletes:      glycin-thumbnailer < %{version}-%{release}
+Provides:       glycin-thumbnailer = %{version}-%{release}
 
 %description thumbnailer
 Sandboxed and extendable image decoding.
@@ -58,6 +62,8 @@ This package contains the thumbnailer implementation.
 %package libs
 Summary:        Sandboxed image rendering (C library)
 Requires:       glycin-loaders%{_isa} = %{version}-%{release}
+Obsoletes:      glycin-libs < %{version}-%{release}
+Provides:       glycin-libs = %{version}-%{release}
 
 %description libs
 Sandboxed and extendable image decoding.
@@ -68,6 +74,8 @@ This package contains a shared library interface for glycin.
 %package gtk4-libs
 Summary:        Sandboxed image rendering (GTK4 integration)
 Requires:       glycin-libs%{_isa} = %{version}-%{release}
+Obsoletes:      glycin-gtk4-libs < %{version}-%{release}
+Provides:       glycin-gtk4-libs = %{version}-%{release}
 
 %description gtk4-libs
 Sandboxed and extendable image decoding.
@@ -165,6 +173,10 @@ mkdir -p "$CARGO_HOME"
 
 
 %changelog
+* Fri Jun 06 2026 phantom <killawattgamer@gmail.com> - 2.1.1-100.bc7fix2
+- Add Obsoletes/Provides to runtime subpackages so plain dnf install
+  replaces the upstream glycin without --allowerasing removing Steam
+
 * Thu May 28 2026 phantom <killawattgamer@gmail.com> - 2.1.1-100.bc7fix1
 - Add BC4/BC5/BC6H/BC7 DDS decoder support to glycin-image-rs
 - Drop-in replacement for the Fedora glycin packages
