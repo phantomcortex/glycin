@@ -4,7 +4,7 @@
 
 Name:           glycin
 Version:        2.1.1
-Release:        100.bc7fix3%{?bc7fix_rev}%{?dist}
+Release:        100.bc7fix4%{?bc7fix_rev}%{?dist}
 Summary:        Sandboxed image rendering (with extended DDS BC4-BC7 support)
 
 License:        MPL-2.0 OR LGPL-2.1-or-later
@@ -36,8 +36,6 @@ loader.
 %package loaders
 Summary:        Sandboxed image rendering (image loading backends)
 Requires:       bubblewrap
-Obsoletes:      glycin-loaders%{_isa} < %{version}-%{release}
-Provides:       glycin-loaders%{_isa} = %{version}-%{release}
 
 %description loaders
 Sandboxed and extendable image decoding.
@@ -50,8 +48,6 @@ adds DDS BC4/BC5/BC6H/BC7 support to the image-rs loader.
 Summary:        Sandboxed image rendering (thumbnailer)
 Requires:       glycin-loaders%{_isa} = %{version}-%{release}
 Obsoletes:      gdk-pixbuf2 < 2.43.5-1
-Obsoletes:      glycin-thumbnailer%{_isa} < %{version}-%{release}
-Provides:       glycin-thumbnailer%{_isa} = %{version}-%{release}
 
 %description thumbnailer
 Sandboxed and extendable image decoding.
@@ -62,8 +58,6 @@ This package contains the thumbnailer implementation.
 %package libs
 Summary:        Sandboxed image rendering (C library)
 Requires:       glycin-loaders%{_isa} = %{version}-%{release}
-Obsoletes:      glycin-libs%{_isa} < %{version}-%{release}
-Provides:       glycin-libs%{_isa} = %{version}-%{release}
 
 %description libs
 Sandboxed and extendable image decoding.
@@ -74,8 +68,6 @@ This package contains a shared library interface for glycin.
 %package gtk4-libs
 Summary:        Sandboxed image rendering (GTK4 integration)
 Requires:       glycin-libs%{_isa} = %{version}-%{release}
-Obsoletes:      glycin-gtk4-libs%{_isa} < %{version}-%{release}
-Provides:       glycin-gtk4-libs%{_isa} = %{version}-%{release}
 
 %description gtk4-libs
 Sandboxed and extendable image decoding.
@@ -173,9 +165,10 @@ mkdir -p "$CARGO_HOME"
 
 
 %changelog
-* Tue Jun 10 2026 phantom <killawattgamer@gmail.com> - 2.1.1-100.bc7fix3
-- Qualify Obsoletes/Provides with %%{_isa} so the x86_64 build no longer
-  blocks installation of the upstream glycin-libs.i686 needed by steam.i686
+* Tue Jun 10 2026 phantom <killawattgamer@gmail.com> - 2.1.1-100.bc7fix4
+- Drop all Obsoletes/Provides from runtime subpackages; same-name packages
+  replace each other by version comparison naturally, and removing these
+  tags allows upstream glycin-libs.i686 to install alongside for steam.i686
 
 * Fri Jun 06 2026 phantom <killawattgamer@gmail.com> - 2.1.1-100.bc7fix2
 - Add Obsoletes/Provides to runtime subpackages so plain dnf install
