@@ -3,7 +3,7 @@
 %global debug_package %{nil}
 
 Name:           glycin
-Version:        2.1.1
+Version:        2.1.5
 Release:        100.bc7fix4%{?bc7fix_rev}%{?dist}
 Summary:        Sandboxed image rendering (with extended DDS BC4-BC7 support)
 
