@@ -2,7 +2,7 @@ name: Build Fedora 44 RPM
 
 on:
   push:
-    branches: [main, fix-dds-bc7]
+    branches: [main]
     tags: ['v*', 'rpm-*']
   pull_request:
     branches: [main]
@@ -13,7 +13,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # needed to attach RPMs to a GitHub release on tag push
+  contents: write  # needed to create releases and attach RPMs
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-rpm:
@@ -63,7 +67,9 @@ jobs:
           else
             REV="gh${GITHUB_RUN_NUMBER}.$(git rev-parse --short HEAD)"
           fi
+          VERSION=$(awk '/^Version:/ {print $2; exit}' build-aux/glycin.spec)
           echo "rev=${REV}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}-${REV}" >> "$GITHUB_OUTPUT"
           echo "Computed suffix: ${REV}"
 
       - name: Set up rpmbuild tree
@@ -112,9 +118,21 @@ jobs:
           path: artifacts/*.rpm
           if-no-files-found: error
 
-      - name: Attach RPMs to GitHub release
+      - name: Publish release (tag push)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          files: artifacts/*.rpm
+          fail_on_unmatched_files: true
+
+      - name: Publish release (push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vr.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: glycin ${{ steps.vr.outputs.tag }}
+          generate_release_notes: true
+          make_latest: true
           files: artifacts/*.rpm
           fail_on_unmatched_files: true
