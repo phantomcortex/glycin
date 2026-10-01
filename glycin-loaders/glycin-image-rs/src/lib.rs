@@ -1,6 +1,7 @@
 #![allow(clippy::large_enum_variant)]
 
 mod animated;
+mod dds;
 mod editor;
 mod exr;
 
@@ -222,7 +223,7 @@ impl LoaderImplementation for ImgLoader {
 
 pub enum ImageRsDecoder<T: std::io::BufRead + std::io::Seek> {
     Bmp(codecs::bmp::BmpDecoder<T>),
-    Dds(codecs::dds::DdsDecoder<T>),
+    Dds(dds::DdsDecoder),
     Farbfeld(codecs::farbfeld::FarbfeldDecoder<T>),
     Gif(codecs::gif::GifDecoder<T>),
     Hdr(codecs::hdr::HdrDecoder<T>),
@@ -260,9 +261,8 @@ impl ImageRsFormat<Reader> {
             ))
             .format_name("BMP")
             .default_bit_depth(8),
-
-            "image/vnd.ms-dds" => Self::new(ImageRsDecoder::Dds(
-                codecs::dds::DdsDecoder::new(data).expected_error()?,
+            "image/vnd.ms-dds" | "image/x-dds" => Self::new(ImageRsDecoder::Dds(
+                dds::DdsDecoder::new(data).expected_error()?,
             ))
             .format_name("DDS")
             .supports_two_grayscale_modes(true),
