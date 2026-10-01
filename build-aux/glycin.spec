@@ -167,7 +167,9 @@ mkdir -p "$CARGO_HOME"
 %changelog
 * Thu Oct 01 2026 phantom <phantom.github@proton.me> - 2.2.1-100.bc7fix5
 - Rebase on upstream glycin 2.2.1; port BC4/BC5/BC6H/BC7 DDS decoder to the
-  new image/vnd.ms-dds mime type and harden header parsing
+  new image/vnd.ms-dds mime type (keeping image/x-dds for shared-mime-info
+  < 2.5), harden header parsing, and add uncompressed DDS support
+  (RGB/RGBA/BGRA/BGRX, 565, luminance, DX10 R8/RGBA8/BGRA8)
 
 * Wed Jun 10 2026 phantom <phantom.github@proton.me> - 2.1.1-100.bc7fix4
 - Drop all Obsoletes/Provides from runtime subpackages; same-name packages

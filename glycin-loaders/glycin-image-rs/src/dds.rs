@@ -14,7 +14,10 @@ use image::{ColorType, ImageDecoder, ImageError, ImageFormat, ImageResult};
 const DDS_MAGIC: &[u8; 4] = b"DDS ";
 const HEADER_SIZE: u32 = 124;
 const PIXEL_FORMAT_SIZE: u32 = 32;
+const PF_ALPHAPIXELS: u32 = 0x1;
 const PF_FOURCC: u32 = 0x4;
+const PF_RGB: u32 = 0x40;
+const PF_LUMINANCE: u32 = 0x20000;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum DdsError {
@@ -51,8 +54,67 @@ fn dec_err(e: DdsError) -> ImageError {
     ImageError::Decoding(DecodingError::new(ImageFormat::Dds.into(), e))
 }
 
+/// Uncompressed pixels: `bytes` little-endian bytes per pixel, channels
+/// selected by bit masks (a zero mask means the channel is absent).
+#[derive(Debug, Copy, Clone)]
+struct RawFormat {
+    bytes: usize,
+    r: u32,
+    g: u32,
+    b: u32,
+    a: u32,
+}
+
+impl RawFormat {
+    fn is_gray8(self) -> bool {
+        self.bytes == 1 && self.a == 0 && self.r == self.g && self.g == self.b
+    }
+
+    /// Extract the channel selected by `mask` and scale it to 8 bits.
+    fn channel(value: u32, mask: u32, default: u8) -> u8 {
+        if mask == 0 {
+            return default;
+        }
+        let bits = mask.count_ones();
+        let v = (value & mask) >> mask.trailing_zeros();
+        match bits {
+            8 => v as u8,
+            1..=7 => (v * 255 / ((1 << bits) - 1)) as u8,
+            _ => (v >> (bits - 8)) as u8,
+        }
+    }
+
+    fn from_masks(
+        bit_count: u32,
+        r: u32,
+        g: u32,
+        b: u32,
+        a: u32,
+    ) -> Option<Self> {
+        if !matches!(bit_count, 8 | 16 | 24 | 32) {
+            return None;
+        }
+        let limit = if bit_count == 32 {
+            u32::MAX
+        } else {
+            (1u32 << bit_count) - 1
+        };
+        if [r, g, b, a].iter().any(|m| m & !limit != 0) || (r | g | b | a) == 0 {
+            return None;
+        }
+        Some(Self {
+            bytes: (bit_count / 8) as usize,
+            r,
+            g,
+            b,
+            a,
+        })
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum BcFormat {
+    Raw(RawFormat),
     Bc1,
     Bc2,
     Bc3,
@@ -65,6 +127,7 @@ enum BcFormat {
 impl BcFormat {
     fn block_bytes(self) -> usize {
         match self {
+            BcFormat::Raw(r) => r.bytes,
             BcFormat::Bc1 | BcFormat::Bc4 { .. } => 8,
             _ => 16,
         }
@@ -72,6 +135,7 @@ impl BcFormat {
 
     fn color_type(self) -> ColorType {
         match self {
+            BcFormat::Raw(r) if r.is_gray8() => ColorType::L8,
             BcFormat::Bc4 { .. } => ColorType::L8,
             BcFormat::Bc5 { .. } => ColorType::Rgb8,
             BcFormat::Bc6h { .. } => ColorType::Rgb32F,
@@ -150,25 +214,40 @@ impl DdsDecoder {
         let pf_flags = read_u32_le(&mut r)?;
         let mut fourcc = [0u8; 4];
         r.read_exact(&mut fourcc)?;
-        let _rgb_bit_count = read_u32_le(&mut r)?;
-        let _r_mask = read_u32_le(&mut r)?;
-        let _g_mask = read_u32_le(&mut r)?;
-        let _b_mask = read_u32_le(&mut r)?;
-        let _a_mask = read_u32_le(&mut r)?;
+        let rgb_bit_count = read_u32_le(&mut r)?;
+        let r_mask = read_u32_le(&mut r)?;
+        let g_mask = read_u32_le(&mut r)?;
+        let b_mask = read_u32_le(&mut r)?;
+        let a_mask = read_u32_le(&mut r)?;
         skip(&mut r, 4 * 5)?; // caps[4] + dwReserved2
 
-        if pf_flags & PF_FOURCC == 0 {
-            return Err(ImageError::Unsupported(
-                UnsupportedError::from_format_and_kind(
-                    ImageFormat::Dds.into(),
-                    UnsupportedErrorKind::Format(ImageFormatHint::Name(
-                        "DDS (uncompressed)".to_string(),
-                    )),
-                ),
-            ));
-        }
+        let unsupported_raw = || {
+            ImageError::Unsupported(UnsupportedError::from_format_and_kind(
+                ImageFormat::Dds.into(),
+                UnsupportedErrorKind::Format(ImageFormatHint::Name(
+                    "DDS (uncompressed)".to_string(),
+                )),
+            ))
+        };
 
-        let format = match &fourcc {
+        let a_mask = if pf_flags & PF_ALPHAPIXELS != 0 { a_mask } else { 0 };
+        let format = if pf_flags & PF_FOURCC == 0 {
+            if pf_flags & PF_RGB != 0 {
+                BcFormat::Raw(
+                    RawFormat::from_masks(rgb_bit_count, r_mask, g_mask, b_mask, a_mask)
+                        .ok_or_else(unsupported_raw)?,
+                )
+            } else if pf_flags & PF_LUMINANCE != 0 {
+                // Luminance (and luminance + alpha): the "red" mask is the gray level.
+                BcFormat::Raw(
+                    RawFormat::from_masks(rgb_bit_count, r_mask, r_mask, r_mask, a_mask)
+                        .ok_or_else(unsupported_raw)?,
+                )
+            } else {
+                return Err(unsupported_raw());
+            }
+        } else {
+            match &fourcc {
             b"DXT1" => BcFormat::Bc1,
             b"DXT2" | b"DXT3" => BcFormat::Bc2,
             b"DXT4" | b"DXT5" => BcFormat::Bc3,
@@ -187,6 +266,7 @@ impl DdsDecoder {
                     ),
                 ));
             }
+            }
         };
 
         if width == 0 || height == 0 {
@@ -201,8 +281,10 @@ impl DdsDecoder {
             return Err(dec_err(DdsError::DimensionsInvalid));
         }
 
-        let bw = width.div_ceil(4) as usize;
-        let bh = height.div_ceil(4) as usize;
+        let (bw, bh) = match format {
+            BcFormat::Raw(_) => (width as usize, height as usize),
+            _ => (width.div_ceil(4) as usize, height.div_ceil(4) as usize),
+        };
         let n_blocks = bw
             .checked_mul(bh)
             .ok_or_else(|| dec_err(DdsError::DimensionsInvalid))?;
@@ -250,6 +332,10 @@ fn read_dx10_format(r: &mut dyn Read) -> ImageResult<BcFormat> {
         return Err(dec_err(DdsError::Dx10Flags(misc_flags_2)));
     }
 
+    let raw = |bits, r, g, b, a| {
+        BcFormat::Raw(RawFormat::from_masks(bits, r, g, b, a).expect("static masks"))
+    };
+
     // DXGI format numbers per
     // https://learn.microsoft.com/en-us/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format
     Ok(match dxgi_format {
@@ -263,6 +349,12 @@ fn read_dx10_format(r: &mut dyn Read) -> ImageResult<BcFormat> {
         94 | 95 => BcFormat::Bc6h { signed: false },
         96 => BcFormat::Bc6h { signed: true },
         97..=99 => BcFormat::Bc7,
+        28 | 29 => raw(8 * 4, 0xff, 0xff00, 0xff_0000, 0xff00_0000),
+        87 | 91 => raw(8 * 4, 0xff_0000, 0xff00, 0xff, 0xff00_0000),
+        88 | 93 => raw(8 * 4, 0xff_0000, 0xff00, 0xff, 0),
+        85 => raw(16, 0xf800, 0x7e0, 0x1f, 0),
+        86 => raw(16, 0x7c00, 0x3e0, 0x1f, 0x8000),
+        61 => raw(8, 0xff, 0xff, 0xff, 0),
         _ => {
             return Err(ImageError::Unsupported(
                 UnsupportedError::from_format_and_kind(
@@ -308,6 +400,27 @@ fn decode_into(
     let block_bytes = format.block_bytes();
 
     match format {
+        BcFormat::Raw(raw) => {
+            let gray = raw.is_gray8();
+            let out_bpp = if gray { 1 } else { 4 };
+            for (px, dst) in payload
+                .chunks_exact(raw.bytes)
+                .zip(out.chunks_exact_mut(out_bpp))
+                .take(w * h)
+            {
+                let mut le = [0u8; 4];
+                le[..raw.bytes].copy_from_slice(px);
+                let v = u32::from_le_bytes(le);
+                if gray {
+                    dst[0] = RawFormat::channel(v, raw.r, 0);
+                } else {
+                    dst[0] = RawFormat::channel(v, raw.r, 0);
+                    dst[1] = RawFormat::channel(v, raw.g, 0);
+                    dst[2] = RawFormat::channel(v, raw.b, 0);
+                    dst[3] = RawFormat::channel(v, raw.a, 255);
+                }
+            }
+        }
         BcFormat::Bc1 | BcFormat::Bc2 | BcFormat::Bc3 | BcFormat::Bc7 => {
             let mut block_out = [0u8; 4 * 4 * 4];
             for by in 0..bh {
