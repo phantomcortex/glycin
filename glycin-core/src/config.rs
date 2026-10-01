@@ -1,6 +1,17 @@
+//! Processor (Loader/Editor) configuration
+//!
+//! If external loaders are used, the configuration will usually be loaded from
+//! the filesystem. The configs must be stored in the form of
+//!
+//! ```
+//! <data-dir>/share/glycin-loaders/<compat-version>+/conf.d/<loader-name>.conf
+//! ```
+//!
+//! where `<data-dir>` is either from `XDG_DATA_DIRS` or `XDG_DATA_HOME`.
+
 mod indentifier;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 #[cfg(feature = "external")]
 use std::os::unix::ffi::OsStrExt;
@@ -10,11 +21,12 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use gio::glib;
-use glycin_common::OperationId;
+use glycin_common::{MemoryFormat, OperationId};
 
 use crate::config::indentifier::Identifier;
+use crate::error::ErrorKind;
 use crate::util::{self, AsyncMutex, new_async_mutex, read};
-use crate::{Error, ErrorKind, SandboxMechanism};
+use crate::{Error, SandboxMechanism};
 
 #[derive(Clone, Debug)]
 /// Mime type
@@ -117,80 +129,30 @@ impl std::fmt::Display for MimeType {
 
 const CONFIG_FILE_EXT: &str = "conf";
 
+/// Configured loaders and editors
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    pub(crate) image_loader: BTreeMap<MimeType, ImageLoaderConfig>,
-    pub(crate) image_editor: BTreeMap<MimeType, ImageEditorConfig>,
-}
-
-impl Config {
-    pub fn loaders(&self) -> &BTreeMap<MimeType, ImageLoaderConfig> {
-        &self.image_loader
-    }
-
-    pub(crate) fn guess_mime_type(
-        &self,
-        path: Option<&Path>,
-        head: &[u8],
-        editor: bool,
-    ) -> Option<MimeType> {
-        let config: Box<dyn Iterator<Item = (&MimeType, ConfigEntry)>> = if editor {
-            Box::new(
-                self.image_editor
-                    .iter()
-                    .map(|(k, v)| (k, ConfigEntry::Editor(v.clone()))),
-            )
-        } else {
-            Box::new(
-                self.image_loader
-                    .iter()
-                    .map(|(k, v)| (k, ConfigEntry::Loader(v.clone()))),
-            )
-        };
-
-        let mut complexities = config
-            .flat_map(|(_, x)| {
-                x.identifiers()
-                    .iter()
-                    .map(|x| x.complexity())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        complexities.sort();
-
-        for complexity in complexities.into_iter().rev() {
-            let find = self.image_loader.iter().find(|(_, x)| {
-                x.identifiers
-                    .iter()
-                    .any(|x| x.complexity() == complexity && x.matches(path, head))
-            });
-
-            if let Some((mime_type, _)) = find {
-                return Some(mime_type.clone());
-            }
-        }
-
-        None
-    }
+    pub(crate) image_loader: BTreeMap<MimeType, LoaderConfig>,
+    pub(crate) image_editor: BTreeMap<MimeType, EditorConfig>,
 }
 
 #[derive(Debug, Clone)]
-pub enum ConfigEntry {
-    Editor(ImageEditorConfig),
-    Loader(ImageLoaderConfig),
+pub(crate) enum ConfigEntry {
+    Editor(EditorConfig),
+    Loader(LoaderConfig),
+}
+
+/// Configuration for a loader
+#[derive(Debug, Clone)]
+pub struct LoaderConfig {
+    pub(crate) processor: Processor,
+    pub(crate) identifiers: Vec<Identifier>,
+    pub(crate) expose_base_dir: bool,
+    pub(crate) fontconfig: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct ImageLoaderConfig {
-    pub processor: Processor,
-    pub identifiers: Vec<Identifier>,
-    pub expose_base_dir: bool,
-    pub fontconfig: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum Processor {
+pub(crate) enum Processor {
     #[cfg(feature = "external")]
     Binary(PathBuf),
     #[cfg(feature = "builtin")]
@@ -238,7 +200,7 @@ impl Processor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ConfigEntryHash {
+pub(crate) struct ConfigEntryHash {
     fontconfig: bool,
     processor: Processor,
     expose_base_dir: bool,
@@ -252,22 +214,56 @@ impl ConfigEntryHash {
     }
 }
 
+/// Configuration for an editor
 #[derive(Debug, Clone)]
-pub struct ImageEditorConfig {
-    pub processor: Processor,
-    pub identifiers: Vec<Identifier>,
-    pub expose_base_dir: bool,
-    pub fontconfig: bool,
-    pub operations: Vec<OperationId>,
-    pub creator: bool,
-    pub creator_color_icc_profile: bool,
-    pub creator_encoding_quality: bool,
-    pub creator_encoding_compression: bool,
-    pub creator_metadata_key_value: bool,
+pub struct EditorConfig {
+    pub(crate) processor: Processor,
+    pub(crate) identifiers: Vec<Identifier>,
+    pub(crate) expose_base_dir: bool,
+    pub(crate) fontconfig: bool,
+    pub(crate) operations: BTreeSet<OperationId>,
+    pub(crate) creator: bool,
+    pub(crate) creator_color_icc_profile: bool,
+    pub(crate) creator_encoding_quality: bool,
+    pub(crate) creator_encoding_compression: bool,
+    pub(crate) creator_metadata_key_value: bool,
+    pub(crate) creator_pixel_density: bool,
+    pub(crate) creator_memory_formats: BTreeSet<MemoryFormat>,
+}
+
+impl EditorConfig {
+    /// Memory formats which the creator supports for writing
+    ///
+    /// # Config Key
+    ///
+    /// Can be set via `CreatorMemoryFormats` in configurations. Example:
+    /// `CreatorMemoryFormats=R8g8b8;R8g8b8a8;`.
+    pub fn creator_memory_formats(&self) -> &BTreeSet<MemoryFormat> {
+        &self.creator_memory_formats
+    }
+
+    /// Supported editing operations
+    ///
+    /// # Config Key
+    ///
+    /// Can be set via `Operations` in configurations. Example:
+    /// `Operations=Clip;Rotate;`.
+    pub fn operations(&self) -> &BTreeSet<OperationId> {
+        &self.operations
+    }
+
+    /// Support creating new images
+    ///
+    /// # Config Key
+    ///
+    /// Can be enabled via `Creator=true` in configurations.
+    pub fn is_creator(&self) -> bool {
+        self.creator
+    }
 }
 
 impl ConfigEntry {
-    pub fn hash_value(
+    pub(crate) fn hash_value(
         &self,
         base_dir: Option<PathBuf>,
         sandbox_mechanism: SandboxMechanism,
@@ -318,6 +314,7 @@ impl ConfigEntry {
 }
 
 impl Config {
+    /// Load configuration from filesystem or cache if used before
     pub async fn cached() -> Arc<Self> {
         static CONFIG: AsyncMutex<Option<Arc<Config>>> = new_async_mutex(None);
         let mut config = CONFIG.lock().await;
@@ -329,22 +326,6 @@ impl Config {
             *config = Some(loaded_config.clone());
             loaded_config
         }
-    }
-
-    pub fn loader(&self, mime_type: &MimeType) -> Result<&ImageLoaderConfig, Error> {
-        if self.image_loader.is_empty() {
-            return Err(ErrorKind::NoLoadersConfigured(self.clone()).err());
-        }
-
-        self.image_loader
-            .get(mime_type)
-            .ok_or_else(|| ErrorKind::UnknownImageFormat(mime_type.to_string(), self.clone()).err())
-    }
-
-    pub fn editor(&self, mime_type: &MimeType) -> Result<&ImageEditorConfig, Error> {
-        self.image_editor
-            .get(mime_type)
-            .ok_or_else(|| ErrorKind::UnknownImageFormat(mime_type.to_string(), self.clone()).err())
     }
 
     async fn load() -> Self {
@@ -370,12 +351,14 @@ impl Config {
             data_dir.push(format!("{}+", crate::COMPAT_VERSION));
             data_dir.push("conf.d");
 
+            tracing::debug!("Looking for loaders in {:?}", data_dir);
+
             if let Ok(mut config_files) = util::read_dir(data_dir).await {
                 while let Some(result) = config_files.next().await {
                     if let Ok(path) = result
                         && path.extension() == Some(OsStr::new(CONFIG_FILE_EXT))
                         && let Err(err) =
-                            Self::load_config(ConfigProcessor::File(path.clone()), &mut config)
+                            Self::load_from_into(ConfigSource::File(path.clone()), &mut config)
                                 .await
                     {
                         tracing::error!("Failed to load config file {path:?}: {err}");
@@ -387,26 +370,73 @@ impl Config {
         config
     }
 
+    pub(crate) fn guess_mime_type(
+        &self,
+        path: Option<&Path>,
+        head: &[u8],
+        editor: bool,
+    ) -> Option<MimeType> {
+        let config: Box<dyn Iterator<Item = (&MimeType, ConfigEntry)>> = if editor {
+            Box::new(
+                self.image_editor
+                    .iter()
+                    .map(|(k, v)| (k, ConfigEntry::Editor(v.clone()))),
+            )
+        } else {
+            Box::new(
+                self.image_loader
+                    .iter()
+                    .map(|(k, v)| (k, ConfigEntry::Loader(v.clone()))),
+            )
+        };
+
+        let mut complexities = config
+            .flat_map(|(_, x)| {
+                x.identifiers()
+                    .iter()
+                    .map(|x| x.complexity())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        complexities.sort();
+
+        for complexity in complexities.into_iter().rev() {
+            let find = self.image_loader.iter().find(|(_, x)| {
+                x.identifiers
+                    .iter()
+                    .any(|x| x.complexity() == complexity && x.matches(path, head))
+            });
+
+            if let Some((mime_type, _)) = find {
+                return Some(mime_type.clone());
+            }
+        }
+
+        None
+    }
+
     #[cfg(feature = "builtin")]
     pub async fn load_builtin_config(builtin: BuiltinProcessor, config: &mut Config) {
         let name = builtin.common().name();
-        if let Err(err) = Self::load_config(ConfigProcessor::Builtin(builtin), config).await {
+        if let Err(err) = Self::load_from_into(ConfigSource::Builtin(builtin), config).await {
             tracing::error!("Failed to load builtin config for '{name}': {err}");
         }
     }
 
-    pub async fn load_config(
-        loader: ConfigProcessor,
+    /// Load config from specified source into existing config
+    pub async fn load_from_into(
+        source: ConfigSource,
         config: &mut Config,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let data = match &loader {
+        let data = match &source {
             #[cfg(feature = "external")]
-            ConfigProcessor::File(path) => {
+            ConfigSource::File(path) => {
                 tracing::trace!("Loading config file {path:?}");
                 read(path).await?
             }
             #[cfg(feature = "builtin")]
-            ConfigProcessor::Builtin(builtin) => builtin.common().config().as_bytes().to_vec(),
+            ConfigSource::Builtin(builtin) => builtin.common().config().as_bytes().to_vec(),
         };
 
         let bytes = glib::Bytes::from_owned(data);
@@ -443,11 +473,11 @@ impl Config {
 
             let exec = keyfile.string(&group, "Exec")?;
 
-            let processor = match loader {
+            let processor = match source {
                 #[cfg(feature = "external")]
-                ConfigProcessor::File(_) => Processor::Binary(exec.into()),
+                ConfigSource::File(_) => Processor::Binary(exec.into()),
                 #[cfg(feature = "builtin")]
-                ConfigProcessor::Builtin(ref builtin) => Processor::Builtin(builtin.clone()),
+                ConfigSource::Builtin(ref builtin) => Processor::Builtin(builtin.clone()),
             };
 
             let identifiers = Self::load_identifiers(&keyfile, &group)?.unwrap_or_default();
@@ -456,7 +486,7 @@ impl Config {
                 Self::handle_and_default(keyfile.boolean(&group, "ExposeBaseDir"))?;
             let fontconfig = Self::handle_and_default(keyfile.boolean(&group, "Fontconfig"))?;
 
-            let cfg = ImageLoaderConfig {
+            let cfg = LoaderConfig {
                 processor,
                 expose_base_dir,
                 fontconfig,
@@ -488,11 +518,11 @@ impl Config {
                 }
             };
 
-            let processor = match loader {
+            let processor = match source {
                 #[cfg(feature = "external")]
-                ConfigProcessor::File(_) => Processor::Binary(exec),
+                ConfigSource::File(_) => Processor::Binary(exec),
                 #[cfg(feature = "builtin")]
-                ConfigProcessor::Builtin(ref builtin) => Processor::Builtin(builtin.clone()),
+                ConfigSource::Builtin(ref builtin) => Processor::Builtin(builtin.clone()),
             };
 
             // Use identifiers previously defined in a loader with the same mime type, if
@@ -507,10 +537,11 @@ impl Config {
             let operations_str = keyfile
                 .string_list(&group, "Operations")
                 .unwrap_or_default();
-            let operations = operations_str
-                .into_iter()
-                .flat_map(|x| OperationId::from_str(&x))
-                .collect();
+            let operations = BTreeSet::from_iter(
+                operations_str
+                    .into_iter()
+                    .flat_map(|x| OperationId::from_str(&x)),
+            );
 
             let creator = Self::handle_and_default(keyfile.boolean(&group, "Creator"))?;
 
@@ -526,7 +557,24 @@ impl Config {
             let creator_metadata_key_value =
                 Self::handle_and_default(keyfile.boolean(&group, "CreatorMetadataKeyValue"))?;
 
-            let cfg = ImageEditorConfig {
+            let creator_pixel_density =
+                Self::handle_and_default(keyfile.boolean(&group, "CreatorPixelDensity"))?;
+
+            let creator_memory_formats = BTreeSet::from_iter(
+                keyfile
+                    .string_list(&group, "CreatorMemoryFormats")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flat_map(|x| {
+                        let f = MemoryFormat::try_from_str(&x);
+                        if f.is_none() {
+                            tracing::warn!("Unknown memory format '{x}' found in {mime_type}")
+                        }
+                        f
+                    }),
+            );
+
+            let cfg = EditorConfig {
                 processor,
                 identifiers,
                 expose_base_dir,
@@ -537,12 +585,42 @@ impl Config {
                 creator_encoding_compression,
                 creator_encoding_quality,
                 creator_metadata_key_value,
+                creator_pixel_density,
+                creator_memory_formats,
             };
 
             config.image_editor.insert(mime_type, cfg);
         }
 
         Ok(())
+    }
+
+    /// Lookup loader configuration based on mime type
+    pub fn loader(&self, mime_type: &MimeType) -> Result<&LoaderConfig, Error> {
+        if self.image_loader.is_empty() {
+            return Err(ErrorKind::NoLoadersConfigured(self.clone()).err());
+        }
+
+        self.image_loader
+            .get(mime_type)
+            .ok_or_else(|| ErrorKind::UnknownImageFormat(mime_type.to_string(), self.clone()).err())
+    }
+
+    /// Lookup editor configuration based on mime type
+    pub fn editor(&self, mime_type: &MimeType) -> Result<&EditorConfig, Error> {
+        self.image_editor
+            .get(mime_type)
+            .ok_or_else(|| ErrorKind::UnknownImageFormat(mime_type.to_string(), self.clone()).err())
+    }
+
+    /// List of all configured loaders
+    pub fn loaders(&self) -> &BTreeMap<MimeType, LoaderConfig> {
+        &self.image_loader
+    }
+
+    /// List of all configured editors
+    pub fn editors(&self) -> &BTreeMap<MimeType, EditorConfig> {
+        &self.image_editor
     }
 
     fn data_dirs() -> Vec<PathBuf> {
@@ -596,7 +674,8 @@ impl Config {
     }
 }
 
-pub enum ConfigProcessor {
+/// Source from which a config can be loaded
+pub enum ConfigSource {
     #[cfg(feature = "external")]
     File(PathBuf),
     #[cfg(feature = "builtin")]

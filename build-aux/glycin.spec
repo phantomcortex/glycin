@@ -3,8 +3,8 @@
 %global debug_package %{nil}
 
 Name:           glycin
-Version:        2.1.1
-Release:        100.bc7fix4%{?bc7fix_rev}%{?dist}
+Version:        2.2.1
+Release:        100.bc7fix5%{?bc7fix_rev}%{?dist}
 Summary:        Sandboxed image rendering (with extended DDS BC4-BC7 support)
 
 License:        MPL-2.0 OR LGPL-2.1-or-later
@@ -165,12 +165,18 @@ mkdir -p "$CARGO_HOME"
 
 
 %changelog
-* Tue Jun 10 2026 phantom <phantom.github@proton.me> - 2.1.1-100.bc7fix4
+* Thu Oct 01 2026 phantom <phantom.github@proton.me> - 2.2.1-100.bc7fix5
+- Rebase on upstream glycin 2.2.1; port BC4/BC5/BC6H/BC7 DDS decoder to the
+  new image/vnd.ms-dds mime type (keeping image/x-dds for shared-mime-info
+  < 2.5), harden header parsing, and add uncompressed DDS support
+  (RGB/RGBA/BGRA/BGRX, 565, luminance, DX10 R8/RGBA8/BGRA8)
+
+* Wed Jun 10 2026 phantom <phantom.github@proton.me> - 2.1.1-100.bc7fix4
 - Drop all Obsoletes/Provides from runtime subpackages; same-name packages
   replace each other by version comparison naturally, and removing these
   tags allows upstream glycin-libs.i686 to install alongside for steam.i686
 
-* Fri Jun 06 2026 phantom <phantom.github@proton.me> - 2.1.1-100.bc7fix2
+* Sat Jun 06 2026 phantom <phantom.github@proton.me> - 2.1.1-100.bc7fix2
 - Add Obsoletes/Provides to runtime subpackages so plain dnf install
   replaces the upstream glycin without --allowerasing removing Steam
 

@@ -1,20 +1,26 @@
+mod color_mode;
 mod common;
 mod creator;
 mod encoded_image;
 mod error;
 mod frame;
+mod frame_details;
 mod frame_request;
 mod image;
 mod loader;
 mod memory_format;
 mod new_frame;
+mod pixel_density;
 
+pub use color_mode::*;
 pub use creator::*;
 pub use encoded_image::*;
 pub use error::*;
 pub use frame::*;
+pub use frame_details::*;
 pub use frame_request::*;
 pub use image::*;
 pub use loader::*;
 pub use memory_format::*;
 pub use new_frame::*;
+pub use pixel_density::*;

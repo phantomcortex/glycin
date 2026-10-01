@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 
 #[cfg(feature = "external")]
@@ -24,7 +25,7 @@ impl std::fmt::Display for MemoryAllocationError {
 
 impl std::error::Error for MemoryAllocationError {}
 
-pub trait ByteData: Sized + Deref<Target = [u8]> + DerefMut + 'static {
+pub trait ByteData: Sized + Deref<Target = [u8]> + DerefMut + Debug + 'static {
     fn new(size: u64) -> std::io::Result<Self>;
     fn into_fungible(self) -> FungibleMemory;
     fn into_other<O: ByteData>(self) -> Result<O, MemoryAllocationError>;

@@ -1,12 +1,12 @@
 [workspace.package]
-version = "2.1.0"
+version = "2.2.0"
 authors = ["Sophie Herold"]
 description = "Sandboxed image decoding"
 license = "MPL-2.0 OR LGPL-2.1-or-later"
 homepage = "https://gnome.pages.gitlab.gnome.org/glycin/"
 repository = "https://gitlab.gnome.org/GNOME/glycin"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.93"
 
 [profile.release]
 lto = true
@@ -44,7 +44,7 @@ default-members = [
     "glycin-dev-tools",
     "glycin-thumbnailer",
     "glycin-utils",
-    "glycin-loaders/glycin-image-rs",
+    "glycin-loaders/*",
 ]
 
 [workspace.lints.clippy]
@@ -66,6 +66,7 @@ async-task = "4.0.0"
 bcdec_rs = "0.2.0"
 bitflags = "2.9.0"
 blocking = "1.6.1"
+bytemuck = { version = "1.25", features = ["extern_crate_std"] }
 cairo-rs = "0.22.0"
 criterion = "0.8.0"
 env_logger = { version = "0.11.0", default-features = false, features = [
@@ -87,34 +88,34 @@ gio-unix = "0.22.0"
 glib = { version = "0.22.0", features = ["v2_68"] }
 glib-sys = { version = "0.22.0", features = ["v2_68"] }
 gobject-sys = { version = "0.22.0", features = ["v2_68"] }
-glycin = { version = "4.0.0", path = "glycin/", default-features = false }
+glycin = { path = "glycin/", default-features = false }
 glycin-builtin = { version = "4.0.0", path = "glycin/glycin-builtin/", default-features = false }
 glycin-core = { version = "4.0.0", path = "glycin-core/", default-features = false }
 glycin-common = { version = "2.0.0", path = "glycin-common/" }
-glycin-image-rs = { version = "2.1.0", path = "glycin-loaders/glycin-image-rs", default-features = false }
-glycin-test = { version = "2.1.0", path = "glycin-loaders/glycin-test", default-features = false }
-glycin-thumbnailer = { version = "2.1.0", path = "glycin-thumbnailer/", default-features = false }
+glycin-image-rs = { version = "2.2.0", path = "glycin-loaders/glycin-image-rs", default-features = false }
+glycin-test = { version = "2.2.0", path = "glycin-loaders/glycin-test", default-features = false }
+glycin-thumbnailer = { version = "2.2.0", path = "glycin-thumbnailer/", default-features = false }
 glycin-utils = { version = "5.0.0", path = "glycin-utils/", default-features = false }
 glycin-external = { version = "4.0.0", path = "glycin/glycin-external/", default-features = false }
-gufo = { version = "0.4.1", features = ["all-image-formats"] }
-gufo-common = { version = "1.1.0", features = ["serde"] }
-gufo-exif = { version = "0.4.0" }
-gufo-jpeg = { version = "0.4.0" }
+gly = { package = "libglycin-rebind", version = "0.2.0", path = "libglycin-rebind/libglycin-rebind/" }
+gufo = { version = "0.5.0" }
+gufo-common = { version = "2.0.0", features = ["serde"] }
+gufo-exif = { version = "0.5.0" }
+gufo-jpeg = { version = "0.5.1" }
+gufo-svg = { version = "0.5.0" }
 half = "2.4.1"
 hayro-jpeg2000 = "0.3.2"
 image = { version = "0.25.9", default-features = false }
-image-extras = { version = "0.1.0", default-features = false, features = [
+image-extras = { version = "0.1.1", default-features = false, features = [
     "xbm",
     "xpm",
 ] }
-lcms2 = "6.0.3"
-lcms2-sys = "4.0.4"
 libc = "0.2.152"
-gly = { package = "libglycin-rebind", version = "0.1.0", path = "libglycin-rebind/libglycin-rebind/" }
 libseccomp = "0.4.0"
 log = "0.4.0"
 memmap = { package = "memmap2", version = "0.9.0" }
-nix = { version = "0.30.0", features = ["fs", "resource", "signal"] }
+moxcms = "0.8.1"
+nix = { version = "0.31.0", features = ["fs", "resource", "signal"] }
 paste = "1.0.0"
 png = "0.18.0"
 rayon = "1.10.0"

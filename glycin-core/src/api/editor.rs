@@ -18,14 +18,14 @@ use zbus::zvariant::OwnedObjectPath;
 use crate::api::*;
 #[cfg(feature = "external")]
 use crate::dbus::EditorProxy;
-use crate::error::ResultExt;
+use crate::error::{ErrorKind, ResultExt};
 use crate::main_context::{MainContextSelector, ProvidesMainContext};
 #[cfg(feature = "external")]
 use crate::pool::PooledProcess;
 use crate::util::{self, CancellableFuture, ShortcutErrorFuture};
-use crate::{Error, ErrorKind, MimeType, Pool, config};
+use crate::{Error, MimeType, Pool, config};
 
-/// Image edit builder
+/// Builder pattern for editing images
 #[derive(Debug)]
 pub struct Editor {
     source: Source,
@@ -80,20 +80,32 @@ impl Editor {
     }
 
     pub fn edit(self) -> Pin<Box<dyn Future<Output = Result<EditableImage, Error>> + Send>> {
+        self.edit_with_sync(false)
+    }
+
+    /// Same as [`Self::edit`] but with sync option
+    ///
+    /// See [`Loader::load_with_sync`] for details about the sync option.
+    fn edit_with_sync(
+        self,
+        sync: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<EditableImage, Error>> + Send>> {
         Box::pin(async move {
             let main_context = self.main_context();
             let cancellable = self.cancellable.clone();
 
-            let f = || async move { self.edit_internal().await }.make_cancellable(cancellable);
+            let f =
+                move || async move { self.edit_internal(sync).await }.make_cancellable(cancellable);
 
             main_context.spawn_from_within(f).await?
         })
     }
 
-    async fn edit_internal(mut self) -> Result<EditableImage, Error> {
+    async fn edit_internal(mut self, sync: bool) -> Result<EditableImage, Error> {
         let source: Source = self.source.send();
 
-        let editor_context = ProcessorContext::new(source, false, &self.sandbox_selector).await?;
+        let editor_context =
+            ProcessorContext::new(source, false, &self.sandbox_selector, sync).await?;
 
         let editor = editor_context
             .editor(self.pool.clone(), &self.cancellable)
@@ -194,6 +206,9 @@ impl Editor {
     }
 }
 
+/// Image handle on which editing operations can be applied
+///
+/// Obtained via [`Editor.edit()`](Editor::edit).
 #[derive(Debug)]
 pub struct EditableImage {
     pub(crate) editor: Editor,
@@ -330,7 +345,7 @@ impl EditableImage {
     }
 
     /// List all configured image editors
-    pub async fn supported_formats() -> BTreeMap<MimeType, config::ImageEditorConfig> {
+    pub async fn supported_formats() -> BTreeMap<MimeType, config::EditorConfig> {
         let config = config::Config::cached().await;
         config.image_editor.clone()
     }
@@ -380,7 +395,7 @@ impl std::fmt::Debug for ImageEditorBuiltin {
 }
 
 #[derive(Debug)]
-/// An image change that is potentially sparse.
+/// Potentially sparse result of an [editor](Editor) operation
 ///
 /// See also: [`EditableImage::apply_sparse()`]
 pub enum SparseEdit {
@@ -392,6 +407,7 @@ pub enum SparseEdit {
     Complete(FungibleMemory),
 }
 
+/// Result of an [editor](Editor) operation
 #[derive(Debug)]
 pub struct Edit {
     inner: CompleteEditorOutput<FungibleMemory>,

@@ -5,31 +5,39 @@ use std::sync::Arc;
 use glib::object::IsA;
 use glib::prelude::*;
 use glycin_common::MemoryFormatInfo;
-use glycin_utils::{ByteData, DimensionTooLargerError, FungibleMemory, MemoryFormat};
+use glycin_utils::{
+    ByteData, DimensionTooLargerError, FungibleMemory, MemoryFormat, MemoryFormatSelection,
+};
+use gufo_common::physical_dimension::PixelDensity;
 
 #[cfg(feature = "builtin")]
 use crate::config;
-use crate::config::{Config, ImageEditorConfig};
-use crate::error::ResultExt;
+use crate::config::{Config, EditorConfig};
+use crate::error::{ErrorKind, ResultExt};
 use crate::pool::Pool;
 use crate::util::CancellableFuture;
-use crate::{Error, ErrorKind, MimeType, Processor, ProcessorContext, SandboxSelector};
+use crate::{Error, MimeType, Processor, ProcessorContext, SandboxSelector};
 
+/// Builder pattern for creating images
 #[derive(Debug)]
 pub struct Creator {
     mime_type: MimeType,
-    config: ImageEditorConfig,
+    config: EditorConfig,
     pool: Arc<Pool>,
     pub(crate) cancellable: gio::Cancellable,
     pub(crate) sandbox_selector: SandboxSelector,
     encoding_options: glycin_utils::EncodingOptions,
     new_image: glycin_utils::NewImage<FungibleMemory>,
-
     new_frames: Vec<NewFrame>,
+    transform_memory_formats: bool,
 }
 
 static_assertions::assert_impl_all!(Creator: Send, Sync);
 
+/// Error for when processors do not support a feature
+///
+/// This error is not fatal. The builder pattern can still be used, but the
+/// option that returned this error will be ignored.
 #[derive(Debug, Clone)]
 pub struct FeatureNotSupported;
 
@@ -55,6 +63,7 @@ impl Creator {
             encoding_options: glycin_utils::EncodingOptions::default(),
             new_image: glycin_utils::NewImage::new(glycin_utils::ImageDetails::new(1, 1), vec![]),
             new_frames: vec![],
+            transform_memory_formats: true,
         })
     }
 
@@ -140,15 +149,36 @@ impl Creator {
         Box::pin(async move {
             let cancellable = self.cancellable.clone();
 
-            self.load_internal().make_cancellable(cancellable).await
+            self.create_internal().make_cancellable(cancellable).await
         })
     }
 
-    async fn load_internal(self) -> Result<EncodedImage, Error> {
+    async fn create_internal(self) -> Result<EncodedImage, Error> {
         let mut new_image = self.new_image;
 
         for frame in self.new_frames {
-            new_image.frames.push(frame.frame()?);
+            let mut frame = frame.frame()?;
+
+            if self.transform_memory_formats {
+                let creator_memory_formats = self.config.creator_memory_formats();
+
+                let target_format = if creator_memory_formats.is_empty() {
+                    tracing::warn!(
+                        "Creator configured without any supported memory formats. This will no longer be supported in the future."
+                    );
+                    frame.memory_format
+                } else {
+                    MemoryFormatSelection::from_memory_formats(creator_memory_formats)
+                        .best_format_for(frame.memory_format)
+                        .ok_or_else(|| {
+                            Error::other("Creator configured without any supported memory formats.")
+                        })?
+                };
+
+                glycin_utils::editing::change_memory_format(&mut frame, target_format)?;
+            }
+
+            new_image.frames.push(frame);
         }
 
         let editor_context =
@@ -179,8 +209,6 @@ impl Creator {
             #[cfg(feature = "builtin")]
             Processor::Builtin(builtin) => {
                 use glycin_utils::EditorImplementation;
-
-                use crate::ErrorKind;
 
                 let mime_type = builtin.mime_type.to_string();
                 let encoding_options = self.encoding_options;
@@ -251,6 +279,15 @@ impl Creator {
         Ok(())
     }
 
+    /// Transform texture to supported memory format
+    ///
+    /// Automatically transform the textures for each frame to a memory format
+    /// that is supported by the image format. The best available format is
+    /// selected via [`MemoryFormatSelection::best_format_for`].
+    pub fn set_transform_memory_format(&mut self, transform: bool) {
+        self.transform_memory_formats = transform;
+    }
+
     pub fn add_metadata_key_value(
         &mut self,
         key: String,
@@ -286,9 +323,12 @@ impl Creator {
     }
 }
 
+/// Builder pattern for a new frame
+///
+/// Returned by [`Creator.add_frame()`](`Creator::add_frame`)
 #[derive(Debug)]
 pub struct NewFrame {
-    config: ImageEditorConfig,
+    config: EditorConfig,
     width: u32,
     height: u32,
     //stride: Option<u32>,
@@ -301,7 +341,7 @@ pub struct NewFrame {
 
 impl NewFrame {
     fn new(
-        config: ImageEditorConfig,
+        config: EditorConfig,
         width: u32,
         height: u32,
         memory_format: MemoryFormat,
@@ -324,11 +364,24 @@ impl NewFrame {
         &mut self,
         icc_profile: Option<Vec<u8>>,
     ) -> Result<(), FeatureNotSupported> {
-        if !self.config.creator_color_icc_profile {
+        if !self.config.creator_color_icc_profile && icc_profile.is_some() {
             return Err(FeatureNotSupported);
         }
 
         self.icc_profile = icc_profile;
+        Ok(())
+    }
+
+    pub fn set_pixel_density(
+        &mut self,
+        pixel_density: Option<PixelDensity>,
+    ) -> Result<(), FeatureNotSupported> {
+        if !self.config.creator_pixel_density && pixel_density.is_some() {
+            return Err(FeatureNotSupported);
+        }
+
+        self.details.pixel_density = pixel_density;
+
         Ok(())
     }
 
@@ -352,6 +405,7 @@ impl NewFrame {
     }
 }
 
+/// Result of a [creator](Creator) operation
 #[derive(Debug)]
 pub struct EncodedImage {
     pub(crate) inner: glycin_utils::EncodedImage<FungibleMemory>,

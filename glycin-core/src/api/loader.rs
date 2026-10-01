@@ -1,18 +1,19 @@
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(feature = "builtin")]
 use futures_util::FutureExt;
 use gio::glib;
 use gio::prelude::*;
 pub use glycin_common::MemoryFormat;
-use glycin_common::{MemoryFormatInfo, MemoryFormatSelection};
+use glycin_common::{ColorProfilePreference, MemoryFormatInfo, MemoryFormatSelection};
 #[cfg(feature = "builtin")]
 use glycin_utils::LoaderImplementation;
 use glycin_utils::safe_math::*;
 use glycin_utils::{ByteData, FungibleMemory};
 use gufo_common::cicp::Cicp;
 use gufo_common::orientation::{Orientation, Rotation};
+use gufo_common::physical_dimension;
 use util::{CancellableFuture, ShortcutErrorFuture, TimeoutFuture};
 #[cfg(feature = "external")]
 use zbus::zvariant::OwnedObjectPath;
@@ -21,15 +22,15 @@ use crate::api::*;
 pub use crate::config::MimeType;
 #[cfg(feature = "external")]
 use crate::dbus::*;
-use crate::error::ResultExt;
+use crate::error::{ErrorKind, ResultExt};
 use crate::main_context::{MainContextSelector, ProvidesMainContext};
 #[cfg(feature = "external")]
 use crate::pool::{PooledProcess, UsageTracker};
 use crate::source::SourceTransmission;
 use crate::util::spawn_blocking;
-use crate::{Error, ErrorKind, MAX_TEXTURE_SIZE, Pool, config, icc, orientation, util};
+use crate::{Error, MAX_TEXTURE_SIZE, Pool, config, icc, orientation, util};
 
-/// Image request builder
+/// Builder pattern for loading images
 #[derive(Debug)]
 pub struct Loader {
     pub(crate) source: Source,
@@ -41,6 +42,7 @@ pub struct Loader {
     pub(crate) memory_format_selection: MemoryFormatSelection,
     pub(crate) limits: Limits,
     pub(crate) main_context_selector: MainContextSelector,
+    pub(crate) color_convert_icc_srgb: bool,
 }
 
 static_assertions::assert_impl_all!(Loader: Send, Sync);
@@ -83,6 +85,7 @@ impl Loader {
             memory_format_selection: MemoryFormatSelection::all(),
             limits: Limits::default(),
             main_context_selector: MainContextSelector::Auto,
+            color_convert_icc_srgb: true,
         }
     }
 
@@ -123,6 +126,14 @@ impl Loader {
         self
     }
 
+    /// Sets whether to convert textures to sRGB if ICC profile is present
+    ///
+    /// The default value if not changed is `true`.
+    pub fn color_convert_icc_srgb(&mut self, convert: bool) -> &mut Self {
+        self.color_convert_icc_srgb = convert;
+        self
+    }
+
     /// Sets if the file's directory can be exposed to loaders
     ///
     /// Some loaders have the `use_base_dir` option enabled to load external
@@ -153,8 +164,23 @@ impl Loader {
     }
 
     /// Load basic image information and enable further operations
-    pub fn load(mut self) -> Pin<Box<dyn Future<Output = Result<Image, Error>> + Send>> {
-        Box::pin(async {
+    pub fn load(self) -> Pin<Box<dyn Future<Output = Result<Image, Error>> + Send>> {
+        self.load_with_sync(false)
+    }
+
+    /// Same as [`load`](Self::load) but with sync option
+    ///
+    /// Setting `sync` to true will use sync variants of the Gio.File API.
+    /// Otherwise, the async Gio.File function might make no progress since some
+    /// libglycin consumers block all GTasks with sync operations, also
+    /// blocking the internal GIO thread pools for IO.
+    ///
+    /// See <https://gitlab.gnome.org/GNOME/glib/-/work_items/4034>.
+    pub(crate) fn load_with_sync(
+        mut self,
+        sync: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<Image, Error>> + Send>> {
+        Box::pin(async move {
             tracing::debug!(image = self.source.display(), "Loading image");
 
             let source = self.source.send();
@@ -163,7 +189,7 @@ impl Loader {
             let timeout = self.limits.inner.timeout;
 
             let f = move || {
-                async move { self.load_internal(source).await }
+                async move { self.load_internal(source, sync).await }
                     .make_cancellable(cancellable)
                     .enforce_timeout(timeout)
             };
@@ -172,9 +198,14 @@ impl Loader {
         })
     }
 
-    async fn load_internal(self, source: Source) -> Result<Image, Error> {
-        let loader_context =
-            ProcessorContext::new(source, self.use_expose_base_dir, &self.sandbox_selector).await?;
+    async fn load_internal(self, source: Source, sync: bool) -> Result<Image, Error> {
+        let loader_context = ProcessorContext::new(
+            source,
+            self.use_expose_base_dir,
+            &self.sandbox_selector,
+            sync,
+        )
+        .await?;
 
         let loader = loader_context
             .loader(self.pool.clone(), &self.cancellable)
@@ -260,7 +291,7 @@ impl Loader {
             #[cfg(feature = "builtin-image-rs")]
             config::BuiltinProcessor::ImageRs(_) => {
                 init_function = Box::new(|stream, mime_type, details| {
-                    glycin_image_rs::ImgDecoder::load(stream, mime_type, details).map(
+                    glycin_image_rs::ImgLoader::load(stream, mime_type, details).map(
                         |(decoder, details)| {
                             (
                                 ImageBuiltinLoader::ImageRs(Arc::new(Mutex::new(decoder))),
@@ -438,7 +469,7 @@ impl Image {
                 match builtin {
                     #[cfg(feature = "builtin-image-rs")]
                     ImageBuiltinLoader::ImageRs(loader) => {
-                        let loader: Arc<Mutex<glycin_image_rs::ImgDecoder>> = loader.to_owned();
+                        let loader: Arc<Mutex<glycin_image_rs::ImgLoader>> = loader.to_owned();
                         editor_function = Box::new(move || {
                             loader
                                 .lock()
@@ -531,7 +562,7 @@ impl Image {
                 .metadata_exif
                 .as_ref()
                 .map(|x| x.to_vec())
-                .and_then(|x| match gufo_exif::Exif::new(x) {
+                .and_then(|x| match gufo_exif::Exif::for_vec(x) {
                     Err(err) => {
                         tracing::warn!("exif: Failed to parse data: {err:?}");
                         None
@@ -566,7 +597,7 @@ struct ImageExternalLoader {
 #[derive(Clone)]
 enum ImageBuiltinLoader {
     #[cfg(feature = "builtin-image-rs")]
-    ImageRs(Arc<Mutex<glycin_image_rs::ImgDecoder>>),
+    ImageRs(Arc<Mutex<glycin_image_rs::ImgLoader>>),
     #[cfg(feature = "builtin-test")]
     Test(Arc<Mutex<glycin_test::ImgDecoder>>),
 }
@@ -578,16 +609,21 @@ impl std::fmt::Debug for ImageBuiltinLoader {
     }
 }
 
+/// More information about an [image](Image)
 #[derive(Debug, Clone)]
 pub struct ImageDetails {
     inner: Arc<glycin_utils::ImageDetails<FungibleMemory>>,
+    metadata: Arc<OnceLock<gufo::Metadata>>,
 }
 
 static_assertions::assert_impl_all!(ImageDetails: Send, Sync);
 
 impl ImageDetails {
     fn new(inner: Arc<glycin_utils::ImageDetails<FungibleMemory>>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            metadata: Default::default(),
+        }
     }
 
     pub fn width(&self) -> u32 {
@@ -596,10 +632,6 @@ impl ImageDetails {
 
     pub fn height(&self) -> u32 {
         self.inner.height
-    }
-
-    pub fn dimensions_inch(&self) -> Option<(f64, f64)> {
-        self.inner.dimensions_inch
     }
 
     /// A textual representation of the image format
@@ -630,6 +662,32 @@ impl ImageDetails {
     pub fn transformation_ignore_exif(&self) -> bool {
         self.inner.transformation_ignore_exif
     }
+
+    fn metadata(&self) -> &gufo::Metadata {
+        self.metadata.get_or_init(|| {
+            let mut metadata = gufo::Metadata::new();
+
+            if let Some(exif) = &self.inner.metadata_exif
+                && let Err(err) = metadata.add_raw_exif(exif.to_vec())
+            {
+                tracing::info!("Could parse Exif data: {err}");
+            }
+
+            if let Some(xmp) = &self.inner.metadata_xmp
+                && let Err(err) = metadata.add_raw_xmp(xmp.to_vec())
+            {
+                tracing::info!("Could parse XMP data: {err}");
+            }
+
+            if let Some(key_value) = &self.inner.metadata_key_value
+                && let Err(err) = metadata.add_key_value(key_value.to_owned())
+            {
+                tracing::info!("Could parse key-value data: {err}");
+            }
+
+            metadata
+        })
+    }
 }
 
 /// A frame of an image often being the complete image
@@ -643,6 +701,7 @@ pub struct Frame {
     pub(crate) memory_format: MemoryFormat,
     pub(crate) delay: Option<std::time::Duration>,
     pub(crate) details: Arc<glycin_utils::FrameDetails<FungibleMemory>>,
+    pub(crate) image_details: ImageDetails,
     pub(crate) color_state: ColorState,
 }
 
@@ -688,7 +747,7 @@ impl Frame {
     }
 
     pub fn details(&self) -> FrameDetails {
-        FrameDetails::new(self.details.clone())
+        FrameDetails::new(self.details.clone(), self.image_details.clone())
     }
 
     #[cfg(feature = "gdk4")]
@@ -725,46 +784,59 @@ impl Frame {
 
         let mut color_state = ColorState::Srgb;
 
-        let frame = if let Some(cicp) = frame
+        let cicp = frame
             .details
             .color_cicp
-            .and_then(|x| Cicp::from_bytes(&x).ok())
+            .and_then(|x| Cicp::from_bytes(&x).ok());
+        let icc_profile = frame.details.color_icc_profile.as_ref().map(|x| x.to_vec());
+        let color_profile_preference = frame.details.color_profile_preference.unwrap_or_default();
+
+        // Use CICP if preferred or no ICC profile is available
+        let use_cicp = matches!(color_profile_preference, ColorProfilePreference::Cicp)
+            || icc_profile.is_none();
+
+        let frame = if let Some(cicp) = cicp
+            && use_cicp
         {
             color_state = ColorState::Cicp(cicp);
             frame
-        } else if let Some(icc_profile) =
-            frame.details.color_icc_profile.as_ref().map(|x| x.to_vec())
-        {
-            let (frame, icc_result) =
-                spawn_blocking(move || icc::apply_transformation(&icc_profile, frame)).await?;
+        } else if let Some(icc_profile) = icc_profile {
+            if image.loader.color_convert_icc_srgb {
+                let (frame, icc_result) =
+                    spawn_blocking(move || icc::apply_transformation(&icc_profile, frame)).await?;
 
-            match icc_result {
-                Err(err) => {
-                    tracing::warn!("Failed to apply ICC profile: {err}");
+                match icc_result {
+                    Err(err) => {
+                        tracing::warn!("Failed to apply ICC profile: {err}");
+                    }
+                    Ok(new_color_state) => {
+                        color_state = new_color_state;
+                    }
                 }
-                Ok(new_color_state) => {
-                    color_state = new_color_state;
-                }
+
+                frame
+            } else {
+                color_state = ColorState::IccProfile(icc_profile);
+                frame
             }
-
-            frame
         } else {
             frame
         };
 
-        let mut frame = if let Some(target_format) = image
+        let mut frame = frame.into_fungible();
+
+        if let Some(target_format) = image
             .loader
             .memory_format_selection
             .best_format_for(frame.memory_format)
             && frame.memory_format != target_format
         {
-            util::spawn_blocking(move || {
-                glycin_utils::editing::change_memory_format(frame.into_fungible(), target_format)
+            frame = util::spawn_blocking(move || {
+                glycin_utils::editing::change_memory_format(&mut frame, target_format)?;
+                Ok::<_, Error>(frame)
             })
-            .await??
-        } else {
-            frame.into_fungible()
-        };
+            .await??;
+        }
 
         frame.final_seal().await?;
 
@@ -776,6 +848,7 @@ impl Frame {
             memory_format: frame.memory_format,
             delay: frame.delay.into(),
             details: Arc::new(frame.details.into_other()?),
+            image_details: image.details(),
             color_state,
         })
     }
@@ -864,14 +937,22 @@ impl FrameRequest {
     }
 }
 
+/// Additional information about a [frame](Frame)
 #[derive(Debug, Clone)]
 pub struct FrameDetails {
     inner: Arc<glycin_utils::FrameDetails<FungibleMemory>>,
+    image_details: ImageDetails,
 }
 
 impl FrameDetails {
-    fn new(inner: Arc<glycin_utils::FrameDetails<FungibleMemory>>) -> Self {
-        Self { inner }
+    fn new(
+        inner: Arc<glycin_utils::FrameDetails<FungibleMemory>>,
+        image_details: ImageDetails,
+    ) -> Self {
+        Self {
+            inner,
+            image_details,
+        }
     }
 
     pub fn color_cicp(&self) -> Option<crate::Cicp> {
@@ -882,6 +963,10 @@ impl FrameDetails {
 
     pub fn color_icc_profile(&self) -> Option<&[u8]> {
         self.inner.color_icc_profile.as_deref()
+    }
+
+    pub fn color_profile_preference(&self) -> ColorProfilePreference {
+        self.inner.color_profile_preference.unwrap_or_default()
     }
 
     pub fn info_alpha_channel(&self) -> Option<bool> {
@@ -898,6 +983,17 @@ impl FrameDetails {
 
     pub fn n_frame(&self) -> Option<u64> {
         self.inner.n_frame
+    }
+
+    pub fn pixel_density(&self) -> Option<physical_dimension::PixelDensity> {
+        self.inner
+            .pixel_density
+            .clone()
+            .or_else(|| self.image_details.metadata().resolution())
+    }
+
+    pub fn physical_size(&self) -> Option<physical_dimension::PhysicalSize> {
+        self.inner.physical_size.clone()
     }
 }
 

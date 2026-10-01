@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::time::Duration;
 
 use glycin_utils::*;
 
@@ -40,12 +41,13 @@ fn handle_instructions<B: ByteData>(
 
     match instructions[0].as_str() {
         "panic" => panic!("Ordered to panic"),
-        "infinte-loop" => loop {},
+        "infinte-loop" => std::thread::sleep(Duration::MAX),
         "alloc" => {
             B::new(instructions[1].parse().unwrap()).expected_error()?;
         }
         "panic-next-step" => (),
         "infinte-loop-next-step" => (),
+        "half-with-icc-profile" => (),
         other => panic!("unknwon instruction {other}"),
     }
 
@@ -63,15 +65,37 @@ impl LoaderImplementation for ImgDecoder {
         Ok((ImgDecoder { instructions }, ImageDetails::new(1, 1)))
     }
 
-    fn specific_frame<T: ByteData>(
+    fn specific_frame<B: ByteData>(
         &mut self,
         _frame_request: FrameRequest,
-    ) -> Result<Frame<T>, ProcessError> {
+    ) -> Result<Frame<B>, ProcessError> {
         match self.instructions[0].as_str() {
             "panic-next-step" => panic!("Requested frame panic"),
             "infinte-loop-next-step" => {
                 eprintln!("Entering infinte loop as requested");
-                loop {}
+                loop {
+                    std::thread::sleep(Duration::MAX)
+                }
+            }
+            "half-with-icc-profile" => {
+                let mut frame = Frame::new(
+                    1,
+                    1,
+                    MemoryFormat::R16g16b16Float,
+                    B::try_from_slice(&[10, 11, 20, 21, 30, 31]).expected_error()?,
+                )
+                .expected_error()?;
+
+                frame.details.color_icc_profile = Some(
+                    B::try_from_vec(
+                        moxcms::ColorProfile::new_bt2020_hlg()
+                            .encode()
+                            .expected_error()?,
+                    )
+                    .expected_error()?,
+                );
+
+                Ok(frame)
             }
             other => panic!("unknwon instruction {other}"),
         }

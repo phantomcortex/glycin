@@ -1,10 +1,11 @@
 mod jpeg;
 mod png;
+mod tiff;
 
 use std::io::{Cursor, Read};
 
 use glycin_utils::*;
-use image::{ExtendedColorType, ImageEncoder, ImageFormat};
+use image::{ExtendedColorType, ImageFormat};
 
 pub enum ImgEditor {
     Png(png::EditorPng),
@@ -58,76 +59,22 @@ impl EditorImplementation for ImgEditor {
 
         let image_format = image_format(&mime_type)?;
 
-        let memory_format = (MemoryFormatSelection::G8
-            | MemoryFormatSelection::G8a8
-            | MemoryFormatSelection::R8g8b8
-            | MemoryFormatSelection::R8g8b8a8
-            | MemoryFormatSelection::G16
-            | MemoryFormatSelection::G16a16
-            | MemoryFormatSelection::R16g16b16
-            | MemoryFormatSelection::R16g16b16a16)
-            .best_format_for(frame.memory_format)
-            .internal_error()?;
+        let frame = frame.into_fungible();
 
-        let frame =
-            glycin_utils::editing::change_memory_format(frame.into_fungible(), memory_format)
-                .expected_error()?;
-
-        let memory_format = image_memory_format(memory_format)?;
+        let memory_format = image_memory_format(frame.memory_format)?;
 
         let icc_profile = frame.details.color_icc_profile.as_ref().map(|x| x.to_vec());
 
         let image_buf = match image_format {
-            ImageFormat::Png => {
-                let compression = if let Some(compression) = encoding_options.compression {
-                    if compression < 30 {
-                        image::codecs::png::CompressionType::Fast
-                    } else if compression < 80 {
-                        image::codecs::png::CompressionType::Default
-                    } else {
-                        image::codecs::png::CompressionType::Best
-                    }
-                } else {
-                    image::codecs::png::CompressionType::Default
-                };
-
-                let mut out_buf = Vec::new();
-                let mut encoder = image::codecs::png::PngEncoder::new_with_quality(
-                    &mut out_buf,
-                    compression,
-                    image::codecs::png::FilterType::default(),
-                );
-
-                if let Some(icc_profile) = icc_profile {
-                    let _ = encoder.set_icc_profile(icc_profile);
-                }
-
-                encoder
-                    .write_image(&frame.texture, frame.width, frame.height, memory_format)
-                    .internal_error()?;
-
-                png::add_metadata(out_buf, &new_image.image_info, &frame.details)
-            }
-            ImageFormat::Jpeg => {
-                let mut out_buf = Vec::new();
-                let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                    &mut out_buf,
-                    encoding_options
-                        .quality
-                        .map(|x| u8::min(x, 100))
-                        .unwrap_or(90),
-                );
-
-                if let Some(icc_profile) = icc_profile {
-                    let _ = encoder.set_icc_profile(icc_profile);
-                }
-
-                encoder
-                    .write_image(&frame.texture, frame.width, frame.height, memory_format)
-                    .internal_error()?;
-
-                out_buf
-            }
+            ImageFormat::Png => png::create(
+                new_image,
+                frame,
+                encoding_options,
+                memory_format,
+                icc_profile,
+            )?,
+            ImageFormat::Jpeg => jpeg::create(frame, encoding_options, icc_profile)?,
+            ImageFormat::Tiff => tiff::create(frame)?,
             _ => {
                 let mut cur = Cursor::new(Vec::new());
                 image::write_buffer_with_format(
@@ -176,6 +123,8 @@ fn image_memory_format(memory_format: MemoryFormat) -> Result<ExtendedColorType,
         MemoryFormat::G16a16 => ExtendedColorType::La16,
         MemoryFormat::R16g16b16 => ExtendedColorType::Rgb16,
         MemoryFormat::R16g16b16a16 => ExtendedColorType::Rgba16,
+        MemoryFormat::R32g32b32Float => ExtendedColorType::Rgb32F,
+        MemoryFormat::R32g32b32a32Float => ExtendedColorType::Rgba32F,
         _ => unreachable!(),
     })
 }

@@ -1,6 +1,8 @@
 mod editing;
 
 use std::io::{Cursor, Read};
+use std::sync::Mutex;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use glycin_utils::safe_math::*;
 use glycin_utils::*;
@@ -11,9 +13,6 @@ use libheif_rs::{
 };
 
 use crate::editing::ImgEditor;
-
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender, channel};
 
 init_main_loader_editor!(ImgDecoder, ImgEditor);
 
@@ -350,6 +349,11 @@ fn decode<B: ByteData>(context: HeifContext, mime_type: &str) -> Result<Frame<B>
     if plane.bits_per_pixel > 8 {
         frame.details.info_bit_depth = Some(plane.bits_per_pixel);
     }
+
+    // The HEIF standard defines that ICC profiles should be prefered of CICP
+    frame.details.color_profile_preference =
+        Some(glycin_common::ColorProfilePreference::IccProfile);
+
     frame.details.info_alpha_channel = Some(handle.has_alpha_channel());
 
     Ok(frame)

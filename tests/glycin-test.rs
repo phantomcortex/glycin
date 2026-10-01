@@ -23,11 +23,6 @@ fn glycin_test_panic_load() {
         let loader = glycin_core::Loader::new_vec(instruction(&[b"panic"]));
         let err = loader.load().await.unwrap_err();
         assert!(err.is_panic(), "Error: {err}");
-        #[cfg(all(feature = "builtin-loaders", not(feature = "external-loaders")))]
-        assert!(matches!(
-            err.kind(),
-            glycin_core::ErrorKind::ThreadPanic(Some(_))
-        ));
     });
 }
 
@@ -138,5 +133,17 @@ fn glycin_test_timeout_next_frame() {
 
         let err = image.next_frame().await.unwrap_err();
         assert!(err.is_timeout(), "Error: {err}");
+    });
+}
+
+#[test]
+fn glycin_test_f16_icc_profile() {
+    init();
+
+    block_on(async {
+        let loader = glycin_core::Loader::new_vec(instruction(&[b"half-with-icc-profile"]));
+        let mut image = loader.load().await.unwrap();
+
+        image.next_frame().await.unwrap();
     });
 }

@@ -20,3 +20,5 @@ glycin-utils = { workspace = true, features = [
     "external",
 ] }
 rsvg = { package = "librsvg-rebind", version = "0.3.0" }
+gufo-svg.workspace = true
+gufo-common.workspace = true

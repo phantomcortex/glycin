@@ -1,4 +1,5 @@
-use std::{path::Path, time::Duration};
+use std::path::Path;
+use std::time::Duration;
 
 use gio::prelude::FileExt;
 use glycin_core as glycin;
@@ -9,6 +10,11 @@ mod utils;
 #[test]
 fn processor_loader_color() {
     test_dir("test-images/images/color");
+}
+
+#[test]
+fn processor_loader_color_variantions() {
+    test_dir("test-images/images/color-variations");
 }
 
 #[test]
@@ -140,7 +146,7 @@ async fn test_dir_animated(dir: impl AsRef<Path>) {
                 .specific_frame(glycin::FrameRequest::default().loop_animation(false))
                 .await
                 .unwrap_err()
-                .is_no_more_frames()
+                .has_no_more_frames()
         );
     }
 }

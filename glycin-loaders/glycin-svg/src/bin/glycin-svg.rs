@@ -1,13 +1,13 @@
-use std::any::Any;
 use std::io::Read;
-use std::os::fd::AsFd;
-use std::os::unix::net::UnixStream;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use gio::glib;
 use gio::prelude::*;
 use glycin_utils::safe_math::*;
 use glycin_utils::*;
+use gufo_common::image::ImageMetadata;
+use gufo_common::physical_dimension::{PhysicalDimension, PhysicalDimensionUnit, PhysicalSize};
 use rsvg::prelude::*;
 
 /// Current librsvg limit on maximum dimensions. See
@@ -33,29 +33,21 @@ pub struct Instruction {
     area: Option<rsvg::Rectangle>,
 }
 
-pub fn thread<B: ByteData, S: Read + Any>(
-    mut source: S,
+pub fn thread<B: ByteData>(
+    data: Vec<u8>,
     base_file: Option<gio::File>,
     info_send: Sender<Result<ImageDetails<B>, ProcessError>>,
     frame_send: Sender<Result<Frame<B>, ProcessError>>,
     instr_recv: Receiver<Instruction>,
 ) {
-    let handle = if let Some(unix_stream) = <dyn Any>::downcast_ref::<UnixStream>(&source) {
-        let fd = unix_stream.as_fd().try_clone_to_owned().unwrap();
-        let input_stream = gio_unix::InputStream::take_fd((fd).into());
-        rsvg::Handle::from_stream_sync(
-            &input_stream,
-            base_file.as_ref(),
-            rsvg::HandleFlags::FLAG_UNLIMITED,
-            gio::Cancellable::NONE,
-        )
-        .expected_error()
-    } else {
-        let mut data = Vec::new();
-        source.read_to_end(&mut data).unwrap();
-
-        rsvg::Handle::from_data(&data).expected_error()
-    };
+    let input_stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(data));
+    let handle = rsvg::Handle::from_stream_sync(
+        &input_stream,
+        base_file.as_ref(),
+        rsvg::HandleFlags::FLAG_UNLIMITED,
+        gio::Cancellable::NONE,
+    )
+    .expected_error();
 
     let handle = match handle {
         Ok(handle) => handle,
@@ -73,7 +65,7 @@ pub fn thread<B: ByteData, S: Read + Any>(
 
     image_info.info_format_name = Some(String::from("SVG"));
     image_info.info_dimensions_text = dimensions_text(intrinsic_dimensions);
-    image_info.dimensions_inch = dimensions_inch(intrinsic_dimensions);
+    let physical_size = physical_size(intrinsic_dimensions);
 
     info_send.send(Ok(image_info)).unwrap();
 
@@ -96,7 +88,11 @@ pub fn thread<B: ByteData, S: Read + Any>(
             continue;
         }
 
-        let frame = render(&handle, instr);
+        let mut frame = render(&handle, instr);
+
+        if let Ok(frame) = &mut frame {
+            frame.details.physical_size = physical_size.clone();
+        }
 
         frame_send.send(frame).unwrap();
     }
@@ -155,10 +151,20 @@ pub fn render<B: ByteData>(
 
 impl LoaderImplementation for ImgDecoder {
     fn load<B: ByteData, S: Read + Send + 'static>(
-        stream: S,
+        mut stream: S,
         _mime_type: String,
         details: InitializationDetails,
     ) -> Result<(Self, ImageDetails<B>), ProcessError> {
+        let mut data = Vec::new();
+        stream.read_to_end(&mut data).expected_error()?;
+
+        let (xmp, data) = {
+            match gufo_svg::Svg::new(data) {
+                Err(err) => (None, err.into_inner()),
+                Ok(svg) => (svg.xmp().pop(), svg.into_inner()),
+            }
+        };
+
         let (info_send, info_recv) = channel();
         let (frame_send, frame_recv) = channel();
         let (instr_send, instr_recv) = channel();
@@ -168,8 +174,10 @@ impl LoaderImplementation for ImgDecoder {
             .as_ref()
             .map(|x| gio::File::for_path(x).child("placeholder.svg"));
 
-        std::thread::spawn(move || thread(stream, base_file, info_send, frame_send, instr_recv));
-        let image_info = info_recv.recv().unwrap()?;
+        std::thread::spawn(move || thread(data, base_file, info_send, frame_send, instr_recv));
+        let mut image_info = info_recv.recv().unwrap()?;
+
+        image_info.metadata_xmp = xmp.map(LocalMemory::from);
 
         let decoder = ImgDecoder {
             thread: Mutex::new(Some(ImgDecoderDetails {
@@ -194,16 +202,9 @@ impl LoaderImplementation for ImgDecoder {
         let height = thread.height;
 
         let total_size = frame_request.scale.unwrap_or((width, height));
-        let area = if let Some(clip) = frame_request.clip {
-            Some(rsvg::Rectangle::new(
-                clip.0.into(),
-                clip.1.into(),
-                clip.2.into(),
-                clip.3.into(),
-            ))
-        } else {
-            None
-        };
+        let area = frame_request.clip.map(|clip| {
+            rsvg::Rectangle::new(clip.0.into(), clip.1.into(), clip.2.into(), clip.3.into())
+        });
 
         let instr = Instruction { total_size, area };
 
@@ -211,7 +212,7 @@ impl LoaderImplementation for ImgDecoder {
 
         let frame = thread.frame_recv.recv().unwrap().expected_error()?;
 
-        Ok(frame.into_other().internal_error()?)
+        frame.into_other().internal_error()
     }
 }
 
@@ -289,26 +290,28 @@ pub fn dimensions_text(
     }
 }
 
-pub fn dimensions_inch(
+pub fn physical_size(
     intrisic_dimensions: (rsvg::Length, rsvg::Length, Option<rsvg::Rectangle>),
-) -> Option<(f64, f64)> {
+) -> Option<PhysicalSize> {
     let width = intrisic_dimensions.0;
     let height = intrisic_dimensions.1;
 
-    if let (Some(w), Some(h)) = (dimension_inch(width), dimension_inch(height)) {
-        Some((w, h))
+    if let (Some(x), Some(y)) = (physical_dimension(width), physical_dimension(height)) {
+        Some(PhysicalSize::new(x, y))
     } else {
         None
     }
 }
 
-pub fn dimension_inch(length: rsvg::Length) -> Option<f64> {
-    match length.unit() {
-        rsvg::Unit::In => Some(length.length()),
-        rsvg::Unit::Cm => Some(length.length() / 2.54),
-        rsvg::Unit::Mm => Some(length.length() / 25.4),
-        rsvg::Unit::Pt => Some(length.length() * 72.),
-        rsvg::Unit::Pc => Some(length.length() / 12. * 72.),
-        _ => None,
-    }
+pub fn physical_dimension(length: rsvg::Length) -> Option<PhysicalDimension> {
+    let unit = match length.unit() {
+        rsvg::Unit::In => PhysicalDimensionUnit::Inch,
+        rsvg::Unit::Cm => PhysicalDimensionUnit::Centimeter,
+        rsvg::Unit::Mm => PhysicalDimensionUnit::Millimeter,
+        rsvg::Unit::Pt => PhysicalDimensionUnit::Point,
+        rsvg::Unit::Pc => PhysicalDimensionUnit::Pica,
+        _ => return None,
+    };
+
+    Some(PhysicalDimension::new(length.length(), unit))
 }

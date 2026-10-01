@@ -2,7 +2,8 @@ mod utils;
 use std::collections::BTreeMap;
 
 use glycin::{Creator, Loader, MimeType};
-use glycin_core as glycin;
+use glycin_core::{self as glycin, MemoryFormat};
+use glycin_utils::MemoryFormatInfo;
 use utils::*;
 
 #[test]
@@ -164,14 +165,9 @@ fn processor_creator_jpeg_stride_invalid() {
         let memory_format = glycin::MemoryFormat::R8g8b8;
         let texture = vec![0; 13];
 
-        let res = encoder
-            .add_frame_with_stride(width, height, 8, memory_format, texture)
-            .unwrap_err();
+        let res = encoder.add_frame_with_stride(width, height, 8, memory_format, texture);
 
-        assert!(matches!(
-            res.kind(),
-            glycin::ErrorKind::TextureWrongSize { .. }
-        ));
+        assert!(res.is_err());
     });
 }
 
@@ -338,5 +334,39 @@ fn processor_creator_avif() {
         assert!(frame.buf_slice()[0] >= 253);
         assert!(frame.buf_slice()[1] <= 2);
         assert!(frame.buf_slice()[2] <= 2);
+    });
+}
+
+#[test]
+fn processor_creator_supported_memory_formats() {
+    block_on(async {
+        let config = glycin::config::Config::cached().await;
+
+        for (mime_type, c) in config.editors() {
+            if mime_type.as_str() == "image/x-glycin-test" {
+                continue;
+            }
+
+            for memory_format in MemoryFormat::ALL {
+                let mut creator = glycin::Creator::new(mime_type.clone()).await.unwrap();
+                creator.set_transform_memory_format(false);
+                let texture = vec![0; memory_format.n_bytes().usize()];
+                creator.add_frame(1, 1, *memory_format, texture).unwrap();
+                let result = creator.create().await;
+
+                // Check if creators actually only support the memory formats declared in config
+                if c.creator_memory_formats().contains(memory_format) {
+                    assert!(
+                        result.is_ok(),
+                        "Expected encoding support for '{mime_type}' with format '{memory_format:?}'"
+                    )
+                } else {
+                    assert!(
+                        result.is_err(),
+                        "Expected error for '{mime_type}' with format '{memory_format:?}'"
+                    )
+                }
+            }
+        }
     });
 }

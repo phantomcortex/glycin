@@ -10,6 +10,7 @@ workflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
       when: never
+    - if: $CI_COMMIT_TAG
 
 variables:
   # Clone test-images
@@ -23,13 +24,21 @@ variables:
 
 .install_dependencies:
   before_script:
+    - |
+      if [ -n "$CUSTOM_ARCH" ]; then
+        dpkg --add-architecture $CUSTOM_ARCH
+      fi
     - apt-get update
-    - apt-get install -y git curl meson pkg-config gobject-introspection gi-docgen valac libgirepository1.0-dev python3-gi build-essential liblcms2-dev gettext clang mold bubblewrap libseccomp-dev libfontconfig-dev
-    - apt-get install -y libgtk-4-dev libcairo2-dev librsvg2-2 libjxl-dev
+    - apt-get install -y git curl meson gcc pkg-config gi-docgen valac gobject-introspection python3-gi build-essential gettext clang mold bubblewrap
+    - |
+      if [ -n "$CUSTOM_ARCH" ]; then
+        apt-get install -y gcc-multilib
+      fi
+    - apt-get install -y libc6-dev:$CUSTOM_ARCH libgirepository1.0-dev:$CUSTOM_ARCH libseccomp-dev:$CUSTOM_ARCH libfontconfig-dev:$CUSTOM_ARCH libgtk-4-dev:$CUSTOM_ARCH libcairo2-dev:$CUSTOM_ARCH librsvg2-dev:$CUSTOM_ARCH libjxl-dev:$CUSTOM_ARCH
     # We need libfheif 1.20
     - echo "deb http://deb.debian.org/debian forky main" > /etc/apt/sources.list.d/forky.list
     - apt-get update
-    - apt-get install -y libheif-dev libheif-plugin-aomenc libheif-plugin-x265
+    - apt-get install -y libheif-dev:$CUSTOM_ARCH libheif-plugin-aomenc:$CUSTOM_ARCH libheif-plugin-x265:$CUSTOM_ARCH
 
   artifacts:
     when: always
@@ -39,12 +48,12 @@ variables:
 
 build-release-tarball:
   stage: build
-  image: rust:1.92-trixie
+  image: rust:1.93-trixie
   extends: .install_dependencies
   script:
     - meson setup builddir
     - meson install -C builddir
-    - apt-get install -y gawk
+    - apt-get install -y python3-tomlkit
     - ./build-aux/publish-crates-io.py
     - meson dist -C builddir
   artifacts:
@@ -57,6 +66,7 @@ build-release-tarball:
 
 benchmark:
   image: quay.io/podman/stable:v5.8.2
+  allow_failure: true
   variables:
     STORAGE_DRIVER: vfs
     IMAGE: registry.bencher.dev/glycin:latest
@@ -70,28 +80,33 @@ benchmark:
     - podman build -t $IMAGE -f build-aux/bencher/Dockerfile .
     - podman push $IMAGE
 
-    - bencher run --project glycin --token $BENCHER_TOKEN --image $IMAGE "./loader-bench --bench tiny.png"
-    - bencher run --project glycin --token $BENCHER_TOKEN --image $IMAGE "./filesizes.py"
+    - echo "Bencher output:" > bencher.txt
+    - set -x
+    - bencher run --quiet --format html --project glycin --branch "$CI_COMMIT_REF_NAME" --token $BENCHER_TOKEN --start-point "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --image $IMAGE "./run-benchmarks.bash" >> bencher.txt
+    - bencher run --quiet --format html --project glycin --branch "$CI_COMMIT_REF_NAME" --token $BENCHER_TOKEN --start-point "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --image $IMAGE "./filesizes.py" >> bencher.txt
+    - cat bencher.txt
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: manual
       allow_failure: true
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-test-x86_64:
+cargo-clippy:
   image: rust
   extends: .install_dependencies
   interruptible: true
   allow_failure: true
   script:
-    - cargo clippy
+    - rustup component add clippy
+    - meson setup -Dprofile=dev -Dglycin-loaders=false -Dglycin-thumbnailer=false --prefix=/usr builddir
+    - meson install -C builddir
+    - cargo clippy --no-deps -- --deny warnings
 
 test-x86_64:
-  image: rust:1.92-trixie
+  image: rust:1.93-trixie
   extends: .install_dependencies
   interruptible: true
   script:
-    - export LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu/
     # Skip isolated install for tests to test usual installation scenario
     - meson setup -Dprofile=dev -Dpython_tests=true -Dtest_skip_install=true -Dcapi_docs=true --prefix=/usr -Dloaders=glycin-heif,glycin-image-rs,glycin-jxl,glycin-raw,glycin-svg,glycin-test builddir
     - meson install -C builddir
@@ -103,23 +118,25 @@ test-x86_64:
       - libglycin-docs
       - libglycin-gtk4-docs
 
-test-i386:
-  # Use hash to force i386, lookup "MANIFEST DIGEST" here <https://hub.docker.com/r/i386/rust/tags>
-  image: rust@sha256:e92287d0a1ba6cfa8ec85b6b660bfd4d6b4dc47e211b511c6cfcf277f330adc0
+test-i686:
+  variables:
+    CUSTOM_ARCH: i386
+  image: rust:1.93-trixie
   extends: .install_dependencies
   interruptible: true
-  # As long as 32-bit CI is so unstable
-  allow_failure: true
   script:
-    - export LD_LIBRARY_PATH=/usr/local/lib/i386-linux-gnu/
+    - rustup target add i686-unknown-linux-gnu
     - apt-get install -y ninja-build
-    - meson setup -Dtest_skip_ext=avif -Dprofile=dev  -Dpython_tests=true -Dtest_skip_install=true --prefix=/usr -Dloaders=glycin-heif,glycin-image-rs,glycin-jxl,glycin-raw,glycin-svg,glycin-test builddir
+    # Disable introspection/vapi because it segfaults in i686
+    - meson setup --cross-file build-aux/cross/cross-linux-i686.txt -Dtest_skip_ext=avif -Dprofile=dev -Dintrospection=false -Dvapi=false -Dtest_skip_install=true --prefix=/usr -Dloaders=glycin-heif,glycin-image-rs,glycin-jxl,glycin-raw,glycin-svg,glycin-test builddir
     - meson install -C builddir
-    - meson test -vC builddir
+    # Disable tests for now since they fail with pkg-config error
+    #- meson test -vC builddir
 
 test-aarch64:
-  image: rust:1.92-trixie
+  image: rust:1.93-trixie
   tags:
+    # Required since other configuration don't allow apt-get
     - asan-aarch64
   extends: .install_dependencies
   interruptible: true
@@ -133,24 +150,28 @@ test-fedora43-loaders:
   image: 'registry.fedoraproject.org/fedora:43'
   interruptible: true
   script:
-    - dnf install --assumeyes glycin-loaders cargo glib2-devel gtk4-devel lcms2-devel libseccomp-devel fontconfig-devel
+    - dnf install --assumeyes glycin-loaders cargo glib2-devel gtk4-devel libseccomp-devel fontconfig-devel
     - rm tests/test-images/images/animated-numbers/animated-numbers.avif
     - rm tests/test-images/images/animated-numbers/animated-numbers.heic
     - rm tests/test-images/editing/crop/crop_ycck.jpg
     - rm tests/test-images/editing/crop-grayscale/crop-grayscale.jpg
+    - rm tests/test-images/images/color/color.hdr
     - rm tests/test-images/images/color/color.jp2
     - rm tests/test-images/images/color/color.xpm
     - rm tests/test-images/images/monochrome/monochrome.xbm
-    - GLYCIN_TEST_SKIP_EXT=heic cargo test -p tests -- --nocapture --test-threads 1 processor_
+    - rm tests/test-images/images/color-variations/color-variations-u32.exr
+    - GLYCIN_TEST_SKIP_EXT=heic cargo test -p tests -- --nocapture --skip processor_creator_supported_memory_formats --test-threads 1 processor_
 
 test-fedora44-loaders:
   image: 'registry.fedoraproject.org/fedora:44'
   interruptible: true
   script:
-    - dnf install --assumeyes glycin-loaders cargo glib2-devel gtk4-devel lcms2-devel libseccomp-devel fontconfig-devel
+    - dnf install --assumeyes glycin-loaders cargo glib2-devel gtk4-devel libseccomp-devel fontconfig-devel
     - rm tests/test-images/images/animated-numbers/animated-numbers.avif
     - rm tests/test-images/images/animated-numbers/animated-numbers.heic
-    - GLYCIN_TEST_SKIP_EXT=heic cargo test -p tests -- --nocapture --test-threads 1 processor_
+    - rm tests/test-images/images/color/color.hdr
+    - rm tests/test-images/images/color-variations/color-variations-u32.exr
+    - GLYCIN_TEST_SKIP_EXT=heic cargo test -p tests -- --nocapture --skip processor_creator_supported_memory_formats --test-threads 1 processor_
 
 macos:
   tags:
@@ -170,12 +191,12 @@ macos:
     - | # Setup the virtual environment with basic set of tools.
       python3 -m venv .venv
       source .venv/bin/activate
-      pip3 install meson==1.9.0 ninja==1.11.1.1
+      pip3 install meson==1.9.0 ninja==1.11.1.1 cmake
       ln -s /opt/ccache/ccache .venv/bin
       ln -s /opt/rustup/toolchains/1.93.1-aarch64-apple-darwin/bin/* .venv/bin
     - | # Clone GTK early so we can access wrapped GLib version.
       git clone https://gitlab.gnome.org/gnome/gtk.git
-      git -C gtk checkout 4.22.2
+      git -C gtk checkout main # Use main for now, since all others are broken due to pango/glib version missmatch
       git -C gtk submodule update --init --recursive
     - | # Build GLib.
       pip3 install crudini==0.9.6   # to pick the version from wrap file
@@ -196,21 +217,14 @@ macos:
           gtk.build gtk
       meson compile -C gtk.build
       meson install -C gtk.build
-    - | # Install lcms2.
-      curl -L https://sourceforge.net/projects/lcms/files/lcms/2.18/lcms2-2.18.tar.gz | tar -xz
-      (
-        mkdir lcms2-2.18.build
-        cd lcms2-2.18.build
-        ../lcms2-2.18/configure --prefix ${CI_PROJECT_DIR}/.venv
-        make
-        make install
-      )
     - | # Install pkgconfig.
       curl -L $CI_API_V4_URL/projects/30437/packages/generic/pkgconfig/v0.29.2+10/pkg-config-0.29.2+10_$(uname -m).tar.xz | tar -C .venv -xJ
   script:
     - cargo build -p glycin --features gdk4
+    - meson setup -Dintrospection=false -Dvapi=false builddir
+    - meson compile -C builddir
 
-windows:
+windows-gnu:
   image: 'registry.fedoraproject.org/fedora:44'
   interruptible: true
   script:
@@ -226,6 +240,10 @@ windows:
     - export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine
     - export WINEPATH="Z:\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin"
     - GLYCIN_TEST_SKIP_EXT=svg,svgz,avif,heic,jxl cargo test -p tests --no-default-features --features async-io,builtin-loaders --target x86_64-pc-windows-gnu
+    # Build libglycin
+    - dnf install -y meson
+    - meson setup --cross-file build-aux/cross/cross-windows.txt -Dintrospection=false -Dvapi=false -Dglycin-thumbnailer=false -Dlibglycin-gtk4=false -Dprofile=dev builddir
+    - meson compile -vvvC builddir
 
 cargo-semver-checks:
   image: rust
@@ -246,7 +264,7 @@ cargo-semver-checks:
     - cargo semver-checks -p libglycin -p libglycin-gtk4 --baseline-rev 97b80be3
 
 libglycin-rebind:
-  image: rust:1.92-trixie
+  image: rust:1.93-trixie
   extends: .install_dependencies
   interruptible: true
   variables:

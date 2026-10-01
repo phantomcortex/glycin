@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Display;
 use std::process::ExitStatus;
 use std::sync::Arc;
@@ -13,7 +12,7 @@ use crate::dbus::RemoteProcess;
 use crate::{DBusProxy, FeatureNotSupported, MAX_TEXTURE_SIZE, config};
 
 #[derive(Debug, Clone, Default)]
-pub struct ErrorContext {
+pub(crate) struct ErrorContext {
     stderr: Option<String>,
     stdout: Option<String>,
 }
@@ -85,9 +84,11 @@ impl Error {
         }
     }
 
-    #[cfg(feature = "unstable")]
-    pub fn kind(self) -> ErrorKind {
-        *self.kind
+    pub fn other(msg: &str) -> Self {
+        Self {
+            kind: Box::new(ErrorKind::Other(msg.to_string())),
+            context: None,
+        }
     }
 
     /// Returns if the error is related to unsupported formats.
@@ -102,6 +103,18 @@ impl Error {
         }
     }
 
+    pub fn failed_image_source(&self) -> Option<glib::Error> {
+        if let ErrorKind::ImageSource(err) = &*self.kind {
+            Some(err.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn has_no_processor_configured(&self) -> bool {
+        matches!(*self.kind, ErrorKind::NoLoadersConfigured(_))
+    }
+
     pub fn is_out_of_memory(&self) -> bool {
         matches!(
             *self.kind,
@@ -109,7 +122,7 @@ impl Error {
         )
     }
 
-    pub fn is_no_more_frames(&self) -> bool {
+    pub fn has_no_more_frames(&self) -> bool {
         matches!(
             *self.kind,
             ErrorKind::RemoteError(RemoteError::NoMoreFrames)
@@ -117,10 +130,20 @@ impl Error {
     }
 
     pub fn is_panic(&self) -> bool {
-        matches!(
+        #[cfg(feature = "builtin")]
+        let result = matches!(
             *self.kind,
             ErrorKind::ThreadPanic(_) | ErrorKind::RemoteError(RemoteError::Panic)
-        )
+        );
+
+        #[cfg(not(feature = "builtin"))]
+        let result = matches!(*self.kind, ErrorKind::RemoteError(RemoteError::Panic));
+
+        result
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        matches!(*self.kind, ErrorKind::Canceled(_))
     }
 
     pub fn is_timeout(&self) -> bool {
@@ -130,7 +153,7 @@ impl Error {
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
-pub enum ErrorKind {
+pub(crate) enum ErrorKind {
     #[error("Remote error: {0}")]
     RemoteError(#[from] RemoteError),
     #[error("GLib error: {0}")]
@@ -184,7 +207,9 @@ pub enum ErrorKind {
     #[error("Seccomp: {0}")]
     Seccomp(Arc<libseccomp::error::SeccompError>),
     #[error("ICC profile: {0}")]
-    IccProfile(#[from] lcms2::Error),
+    IccProfile(#[from] moxcms::CmsError),
+    #[error("Memory transformation: {0}")]
+    MemoryTransformation(#[from] bytemuck::PodCastError),
     #[error("Operation was explicitly canceled.\nOriginal error: {0:?}")]
     Canceled(Option<String>),
     #[error("Editing: {0}")]
@@ -204,6 +229,7 @@ pub enum ErrorKind {
     MemoryAllocationError(String),
     #[error("GLib thread failed: {0}")]
     JoinError(String),
+    #[cfg(feature = "builtin")]
     #[error("Thread panic: {0:?}")]
     ThreadPanic(Option<String>),
     #[error("Feature not supported: {0}")]
@@ -212,6 +238,8 @@ pub enum ErrorKind {
     Timeout(Duration),
     #[error("This state should never have been reached: {0}:{1}")]
     Unreachable(&'static str, u32),
+    #[error("Other: {0}")]
+    Other(String),
 }
 
 impl ErrorKind {
@@ -219,7 +247,8 @@ impl ErrorKind {
         Error::from_kind(self)
     }
 
-    pub fn panic(any: Box<dyn Any>) -> ErrorKind {
+    #[cfg(feature = "builtin")]
+    pub fn panic(any: Box<dyn std::any::Any>) -> ErrorKind {
         let s = any
             .downcast_ref::<&str>()
             .map(|x| x.to_string())

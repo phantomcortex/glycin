@@ -1,4 +1,4 @@
-if not get_option('glycin-loaders')
+if not glycin_loaders
   subdir_done()
 endif
 
@@ -20,14 +20,13 @@ endif
 if get_option('tests')
   dependency('gio-2.0', version: gio_req)
   dependency('gtk4', version: gtk4_req)
-  dependency('lcms2', version: lcms2_req)
 endif
 
 glycin_datadir = datadir / 'glycin-loaders' / compat_version
 
 meson.add_devenv({'XDG_DATA_HOME': datadir})
 
-meson.add_dist_script('../build-aux/dist-vendor.sh', meson.project_version())
+meson.add_dist_script('../build-aux/dist-vendor.py', meson.project_version())
 
 i18n = import('i18n')
 
@@ -49,7 +48,7 @@ manifest = meson.project_source_root() / 'Cargo.toml'
 cargo_options = [
   '--profile', cargo_profile,
   '--manifest-path', manifest,
-]
+] + cargo_target_args
 
 git_version = ''
 
@@ -103,7 +102,7 @@ foreach loader : get_option('loaders')
     output: loader,
     command: [
       'cp',
-      cargo_target_dir / rust_target / loader,
+      cargo_artifact_dir / rust_target / loader,
       '@OUTPUT@',
     ],
   )
@@ -198,7 +197,7 @@ if get_option('tests')
       '--test-threads=1',
       '--nocapture', tests,
     ],
-    env: env,
+    env: env + test_env,
     is_parallel: false,
     timeout: 1800,
   )
@@ -219,7 +218,7 @@ if get_option('tests')
         '--test-threads=1',
         '--nocapture', tests,
       ],
-      env: env,
+      env: env + test_env,
       is_parallel: false,
       timeout: 1800,
     )

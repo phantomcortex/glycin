@@ -73,6 +73,26 @@ G_DECLARE_FINAL_TYPE(GlyFrameRequest, gly_frame_request, GLY, FRAME_REQUEST, GOb
 #define GLY_TYPE_FRAME (gly_frame_get_type())
 G_DECLARE_FINAL_TYPE(GlyFrame, gly_frame, GLY, FRAME, GObject)
 
+/**
+ * GlyFrameDetails:
+ *
+ * Detailled information about a frame.
+ *
+ * Since: 2.2
+ */
+#define GLY_TYPE_FRAME_DETAILS (gly_frame_details_get_type())
+G_DECLARE_FINAL_TYPE(GlyFrameDetails, gly_frame_details, GLY, FRAME_DETAILS, GObject)
+
+/**
+ * GlyPixelDensity:
+ *
+ * Pixel density.
+ *
+ * Since: 2.2
+ */
+#define GLY_TYPE_PIXEL_DENSITY (gly_pixel_density_get_type())
+G_DECLARE_FINAL_TYPE(GlyPixelDensity, gly_pixel_density, GLY, PIXEL_DENSITY, GObject)
+
 /**************** GlySandboxSelector ****************/
 
 /**
@@ -168,6 +188,33 @@ typedef enum
 } GlyMemoryFormatSelection;
 
 GType gly_memory_format_selection_get_type(void);
+
+/**************** GlyPhysicalDimensionUnit ****************/
+
+/**
+ * GlyPhysicalDimensionUnit:
+ * @GLY_PHYSICAL_DIMENSION_UNIT_INCH:
+ * @GLY_PHYSICAL_DIMENSION_UNIT_PICA
+ * @GLY_PHYSICAL_DIMENSION_UNIT_POINT:
+ * @GLY_PHYSICAL_DIMENSION_UNIT_METER:
+ * @GLY_PHYSICAL_DIMENSION_UNIT_CENTIMETER:
+ * @GLY_PHYSICAL_DIMENSION_UNIT_MILLIMETER:
+ *
+ * Sandbox mechanisms
+ *
+ * Since: 2.2
+ */
+typedef enum
+{
+    GLY_PHYSICAL_DIMENSION_UNIT_INCH = 1,
+    GLY_PHYSICAL_DIMENSION_UNIT_PICA = 2,
+    GLY_PHYSICAL_DIMENSION_UNIT_POINT = 3,
+    GLY_PHYSICAL_DIMENSION_UNIT_METER = 4,
+    GLY_PHYSICAL_DIMENSION_UNIT_CENTIMETER = 5,
+    GLY_PHYSICAL_DIMENSION_UNIT_MILLIMETER = 6,
+} GlyPhysicalDimensionUnit;
+
+GType gly_physical_dimension_unit_get_type(void);
 
 /**************** GlyLoader ****************/
 
@@ -298,6 +345,20 @@ void gly_loader_set_accepted_memory_formats(GlyLoader *loader,
  */
 void gly_loader_set_apply_transformations(GlyLoader *loader,
                                           gboolean apply_transformations);
+
+/**
+ * gly_loader_set_color_convert_icc_srgb:
+ * @loader:
+ * @convert:
+ *
+ * Sets whether to convert textures to sRGB if ICC profile is present
+ *
+ * This option is enabled by default.
+ *
+ * Since: 2.2
+ */
+void gly_loader_set_color_convert_icc_srgb(GlyLoader *loader,
+                                           gboolean convert);
 
 /**
  * gly_loader_load:
@@ -587,11 +648,11 @@ uint16_t gly_image_get_transformation_orientation(GlyImage *image);
 
 /**
  * GlyMemoryFormat:
- * @GLY_MEMORY_B8G8R8A8_PREMULTIPLIED: 8-bit RGRA premultiplied
+ * @GLY_MEMORY_B8G8R8A8_PREMULTIPLIED: 8-bit BGRA premultiplied
  * @GLY_MEMORY_A8R8G8B8_PREMULTIPLIED: 8-bit ARGB premultiplied
  * @GLY_MEMORY_R8G8B8A8_PREMULTIPLIED: 8-bit RGBA premultiplied
- * @GLY_MEMORY_B8G8R8A8: 8-bit RGBA
- * @GLY_MEMORY_A8R8G8B8: 8-bit AGBR
+ * @GLY_MEMORY_B8G8R8A8: 8-bit BGRA
+ * @GLY_MEMORY_A8R8G8B8: 8-bit ARGB
  * @GLY_MEMORY_R8G8B8A8: 8-bit RGBA
  * @GLY_MEMORY_A8B8G8R8: 8-bit ABGR
  * @GLY_MEMORY_R8G8B8: 8-bit RGB
@@ -611,7 +672,9 @@ uint16_t gly_image_get_transformation_orientation(GlyImage *image);
  * @GLY_MEMORY_G16A16: 16-bit gray with alpha
  * @GLY_MEMORY_G16: 16-bit gray
  *
- * Memory format
+ * Describes the formats the image data can have. Orderings like "RGB" are
+ * independent of the systems endianness. Single channels like "R16" follow
+ * the endianness of the system.
  *
  * Since: 2.0
  */
@@ -643,6 +706,25 @@ typedef enum
 } GlyMemoryFormat;
 
 GType gly_memory_format_get_type(void);
+
+/**
+ * GlyColorMode:
+ * @GLY_COLOR_MODE_SRGB: The frame's texture is in sRGB color profile. No further color inforamtion is available.
+ * @GLY_COLOR_MODE_CICP: The frame's texture is in the color profile as specified by [method@Frame.get_color_cicp].
+ * @GLY_COLOR_MODE_ICC_PROFILE: The frame's texture is in the color profile as specified by [method@Frame.get_color_icc_profile].
+ *
+ * Specifies what defines the textures color profile.
+ *
+ * Since: 2.2
+ */
+typedef enum
+{
+    GLY_COLOR_MODE_SRGB = 1,
+    GLY_COLOR_MODE_CICP = 2,
+    GLY_COLOR_MODE_ICC_PROFILE = 3,
+} GlyColorMode;
+
+GType gly_color_mode_get_type(void);
 
 /**
  * gly_memory_format_has_alpha:
@@ -744,6 +826,16 @@ GBytes *gly_frame_get_buf_bytes(GlyFrame *frame);
 GlyMemoryFormat gly_frame_get_memory_format(GlyFrame *frame);
 
 /**
+ * gly_frame_get_details:
+ * @frame:
+ *
+ * Returns: (transfer full): More information about the frame
+ *
+ * Since: 2.2
+ */
+GlyFrameDetails *gly_frame_get_details(GlyFrame *frame);
+
+/**
  * GlyCicp: (copy-func gly_cicp_copy) (free-func gly_cicp_free)
  *
  * See ITU-T H.273
@@ -767,6 +859,18 @@ void gly_cicp_free(GlyCicp *cicp);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GlyCicp, gly_cicp_free)
 
 /**
+ * gly_frame_get_color_mode:
+ * @frame:
+ *
+ * This function advertises which property contains the color information for the frame's texture. See [Enum.ColorMode] for details.
+ *
+ * Returns: (transfer full): Color Mode
+ *
+ * Since: 2.2
+ */
+GlyColorMode gly_frame_get_color_mode(GlyFrame *frame);
+
+/**
  * gly_frame_get_color_cicp:
  * @frame:
  *
@@ -778,6 +882,99 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(GlyCicp, gly_cicp_free)
  * Since: 2.0
  */
 GlyCicp *gly_frame_get_color_cicp(GlyFrame *frame);
+
+/**
+ * gly_frame_get_color_icc_profile:
+ * @frame:
+ *
+ * Returns the ICC profile for the frames texture.
+ * This value is `NULL` if no CICP is used.
+ *
+ * Returns: (nullable) (transfer full): Binary ICC profile
+ *
+ * Since: 2.2
+ */
+GBytes *gly_frame_get_color_icc_profile(GlyFrame *frame);
+
+/**************** GlyFrameDetails ****************/
+
+/**
+ * gly_pixel_density_new:
+ * @x_value:
+ * @x_unit:
+ * @y_value:
+ * @y_unit:
+ *
+ * Returns: Pixel density
+ *
+ * Since: 2.2
+ */
+GlyPixelDensity *gly_pixel_density_new(double x_value,
+                                       GlyPhysicalDimensionUnit x_unit,
+                                       double y_value,
+                                       GlyPhysicalDimensionUnit y_unit);
+
+/**
+ * gly_pixel_density_get_x_value:
+ * @pixel_density:
+ *
+ * Returns: Horizontal pixel density
+ *
+ * Since: 2.2
+ */
+double gly_pixel_density_get_x_value(GlyPixelDensity *pixel_density);
+
+/**
+ * gly_pixel_density_get_x_unit:
+ * @pixel_density:
+ *
+ * Returns: Horizontal pixel density unit
+ *
+ * Since: 2.2
+ */
+GlyPhysicalDimensionUnit gly_pixel_density_get_x_unit(GlyPixelDensity *pixel_density);
+
+/**
+ * gly_pixel_density_get_y_value:
+ * @pixel_density:
+ *
+ * Returns: Vertical pixel density
+ *
+ * Since: 2.2
+ */
+double gly_pixel_density_get_y_value(GlyPixelDensity *pixel_density);
+
+/**
+ * gly_pixel_density_get_y_unit:
+ * @pixel_density:
+ *
+ * Returns: Horizontal pixel density unit
+ *
+ * Since: 2.2
+ */
+GlyPhysicalDimensionUnit gly_pixel_density_get_y_unit(GlyPixelDensity *pixel_density);
+
+/**
+ * gly_pixel_density_convert:
+ * @pixel_density:
+ *
+ * Returns: (transfer full): Converted pixel density
+ *
+ * Since: 2.2
+ */
+GlyPixelDensity *gly_pixel_density_convert(GlyPixelDensity *pixel_density, GlyPhysicalDimensionUnit unit);
+
+/**************** GlyFrameDetails ****************/
+
+/**
+ * gly_frame_details_get_pixel_density:
+ * @frame_details:
+ *
+ * Returns: (transfer full): Pixel density.
+ *
+ * Since: 2.2
+ */
+GlyPixelDensity *gly_frame_details_get_pixel_density(GlyFrameDetails *frame_details);
 
 /**************** GlyLoaderError ****************/
 
@@ -853,6 +1050,16 @@ G_DECLARE_FINAL_TYPE(GlyNewFrame, gly_new_frame, GLY, NEW_FRAME, GObject)
  * Since: 2.0
  */
 gboolean gly_new_frame_set_color_icc_profile(GlyNewFrame *new_frame, GBytes *icc_profile);
+
+/**
+ * gly_new_frame_set_pixel_density:
+ * @new_frame:
+ * @pixel_density:
+ *
+ * Since: 2.2
+ */
+void gly_new_frame_set_pixel_density(GlyNewFrame *new_frame,
+                                     GlyPixelDensity *pixel_density);
 
 /**
  * GlyEncodedImage:

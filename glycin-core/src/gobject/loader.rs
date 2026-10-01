@@ -8,8 +8,9 @@ use glib::subclass::prelude::*;
 use glycin_common::MemoryFormatSelection;
 
 use super::{GlyImage, init};
+use crate::error::ErrorKind;
 use crate::main_context::ProvidesMainContext;
-use crate::{Loader, SandboxSelector};
+use crate::{Loader, SandboxSelector, util};
 
 static_assertions::assert_impl_all!(GlyLoader: Send, Sync);
 
@@ -35,6 +36,8 @@ pub mod imp {
         accepted_memory_formats: PhantomData<MemoryFormatSelection>,
         #[property(set=Self::set_apply_transformations)]
         apply_transformations: PhantomData<bool>,
+        #[property(set=Self::set_color_convert_icc_srgb)]
+        color_convert_icc_srgb: PhantomData<bool>,
 
         pub(super) loader: Mutex<Option<Loader>>,
     }
@@ -81,15 +84,15 @@ pub mod imp {
         }
 
         fn init(&self, loader: Loader) {
-            glib::MainContext::new().block_on(async {
-                let mut loader_mutex =self.loader.lock().await;
-               if loader_mutex.is_some() {
-                        g_critical!(
-                            "glycin",
-                            "A loader needs to be initialized with exactly one of the 'file', 'stream', or 'bytes' properties. More than one specified."
-                        );
+            util::block_on(async {
+                let mut loader_mutex = self.loader.lock().await;
+                if loader_mutex.is_some() {
+                    g_critical!(
+                        "glycin",
+                        "A loader needs to be initialized with exactly one of the 'file', 'stream', or 'bytes' properties. More than one specified."
+                    );
                 } else {
-                  *loader_mutex = Some(loader);
+                    *loader_mutex = Some(loader);
                 }
             })
         }
@@ -119,6 +122,12 @@ pub mod imp {
         fn set_apply_transformations(&self, apply_transformations: bool) {
             self.inspect(|x| {
                 x.apply_transformations(apply_transformations);
+            });
+        }
+
+        fn set_color_convert_icc_srgb(&self, convert: bool) {
+            self.inspect(|x| {
+                x.color_convert_icc_srgb(convert);
             });
         }
 
@@ -162,13 +171,13 @@ impl GlyLoader {
     }
 
     pub fn load(&self) -> Result<GlyImage, crate::Error> {
-        glib::MainContext::new().block_on(async {
+        util::block_on(async {
             let Some(mut loader) = std::mem::take(&mut *self.imp().loader.lock().await) else {
-                return Err(crate::ErrorKind::LoaderUsedTwice.into());
+                return Err(ErrorKind::LoaderUsedTwice.into());
             };
 
             loader.main_context_selector(crate::MainContextSelector::Managed);
-            let image = loader.load().await?;
+            let image = loader.load_with_sync(true).await?;
 
             Ok(GlyImage::new(image))
         })

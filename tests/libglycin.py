@@ -61,6 +61,11 @@ def main():
     test_image_cicp = os.path.join(dir, "test-images/images/cicp-p3/cicp-p3.png")
     file_cicp = Gio.File.new_for_path(test_image_cicp)
 
+    test_image_icc_profile = os.path.join(
+        dir, "test-images/images/color-iccp-pro/color-iccp-pro.jpg"
+    )
+    file_icc_profile = Gio.File.new_for_path(test_image_icc_profile)
+
     test_image_orientation = os.path.join(dir, "test-images/images/color-exif-orientation/color-rotated-90.jpg")
     file_orientation = Gio.File.new_for_path(test_image_orientation)
 
@@ -170,11 +175,16 @@ def main():
 
     frame = image.next_frame()
     cicp = frame.get_color_cicp()
+    icc_profile = frame.get_color_icc_profile()
+    color_mode = frame.get_color_mode()
 
     assert cicp.color_primaries == 12
     assert cicp.transfer_characteristics == 13
     assert cicp.matrix_coefficients == 0
     assert cicp.video_full_range_flag == 1
+
+    assert icc_profile is None
+    assert color_mode == Gly.ColorMode.CICP
 
     cicp_copy = cicp.copy()
 
@@ -192,6 +202,21 @@ def main():
     assert cicp.get_matrix_coefficients() == 0
     assert cicp.get_range() == Gdk.CicpRange.FULL
 
+    # ICC Profile
+
+    loader = Gly.Loader.new(file_icc_profile)
+    loader.set_color_convert_icc_srgb(False)
+    image = loader.load()
+
+    frame = image.next_frame()
+    icc_profile = frame.get_color_icc_profile()
+    cicp = frame.get_color_cicp()
+    color_mode = frame.get_color_mode()
+
+    assert icc_profile is not None
+    assert cicp is None
+    assert color_mode == Gly.ColorMode.ICC_PROFILE
+
     # Animation
 
     loader = Gly.Loader.new(file_animation)
@@ -208,7 +233,6 @@ def main():
     else:
         raise Exception('Failed to raise Error')
 
-
     # Functions
 
     assert len(Gly.Loader.get_mime_types()) > 0
@@ -222,6 +246,9 @@ def main():
     data = GLib.Bytes.new([1, 2, 3, 4])
     frame = creator.add_frame_with_stride(1, 1, 4, Gly.MemoryFormat.R8G8B8, data)
     frame.set_color_icc_profile(data)
+    frame.set_pixel_density(
+        Gly.PixelDensity(x_value= 1000, x_unit=Gly.PhysicalDimensionUnit.METER, y_value=90, y_unit=Gly.PhysicalDimensionUnit.INCH)
+    )
 
     encoded_image = creator.create()
 
@@ -232,6 +259,22 @@ def main():
     image = loader.load()
 
     assert list(image.get_metadata_key_value("key")) == list("Value")
+
+    frame = image.next_frame()
+    frame_details = frame.get_details()
+    pixel_density = frame_details.get_pixel_density()
+
+    assert pixel_density.get_x_value() == 1000
+    assert pixel_density.get_x_unit() == Gly.PhysicalDimensionUnit.METER
+    assert pixel_density.get_y_value() == 3543
+    assert pixel_density.get_y_unit() == Gly.PhysicalDimensionUnit.METER
+
+    pixel_density = pixel_density.convert(Gly.PhysicalDimensionUnit.INCH)
+
+    assert round(pixel_density.get_x_value()) == 25
+    assert pixel_density.get_x_unit() == Gly.PhysicalDimensionUnit.INCH
+    assert round(pixel_density.get_y_value()) == 90
+    assert pixel_density.get_y_unit() == Gly.PhysicalDimensionUnit.INCH
 
     error_domain = None
     try:

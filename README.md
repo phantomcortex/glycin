@@ -1,21 +1,29 @@
 # Glycin
 
-Glycin allows to decode, edit, and create images and read metadata. The decoding happens in sandboxed modular *image loaders and editors*.
+Glycin allows to decode, edit, and create images and read metadata. On Linux, decoding happens in sandboxed modular *image loaders*. We use the term 'image loader' for simplicity, but image loaders also handle image editing and creation.
 
 - [glycin](https://docs.rs/glycin/) – The Rust image library
     - [libglycin](https://gnome.pages.gitlab.gnome.org/glycin/libglycin/) – C-Bindings for the library
     - [libglycin-gtk4](https://gnome.pages.gitlab.gnome.org/glycin/libglycin-gtk4/) – C-Bindings to convert glycin frames to GDK Textures
+    - [libglycin-rebind](https://crates.io/crates/libglycin-rebind) - Safe Rust bindings to libglycin
 - [glycin-loaders](glycin-loaders) – Glycin loaders for several formats
 - [glycin-thumbnailer](glycin-thumbnailer) – Glycin thumbnailer using the installed loaders
+
+Bindings for other languages:
+
+- [GJS](https://gjs-docs.gnome.org/gly2~2/)
+- [Python](https://api.pygobject.gnome.org/Gly-2/)
 
 Other rust crates:
 
 - [glycin-utils](https://docs.rs/glycin-utils/) – Utilities to write loaders for glycin
 - [glycin-common](https://docs.rs/glycin-common/) – Components shared between the glycin-utils and glycin crates.
 
+Libglycin, glycin-loaders, and glycin-thumbnailer are released as [tarballs](https://download.gnome.org/sources/glycin/) and use the same synced version. The rust crates are available from [crates.io](https://crates.io/search?q=glycin) and use versions that are not in sync with the other versions. You can check the [NEWS](NEWS) file to see which versions were part of a specific release.
+
 ## Usage and Packaging
 
-The Rust client library is available as [glycin on crates.io](https://docs.rs/glycin/). For other programming languages, the libglycin C client library can be used. For the client libraries to work, **loader binaries must also be installed**. The loader binaries provided by the glycin project cover a lot of common image formats (see below). Both, the loader binaries and libglycin can be built from the released [glycin tarballs](https://download.gnome.org/sources/glycin/). By using `-Dglycin-thumbnailer=false`, `-Dglycin-loaders=false`, `-Dlibglycin=false`, or `-Dlibglycin-gtk4=false` it is possible to build only specific components. In distributions, the loaders are usually packaged as *glycin-loaders*, and libglycin as *libglycin-2*. However, each loader binary could be also packaged as its own package.
+The Rust client library is available as [glycin on crates.io](https://docs.rs/glycin/). For other programming languages, the libglycin C client library can be used. For the client libraries to work on Linux, **loader binaries must also be installed**. The loader binaries provided by the glycin project cover a lot of common image formats (see below). Both, the loader binaries and libglycin can be built from the released [glycin tarballs](https://download.gnome.org/sources/glycin/). By using `-Dglycin-thumbnailer=false`, `-Dglycin-loaders=false`, `-Dlibglycin=false`, or `-Dlibglycin-gtk4=false` it is possible to build only specific components. In distributions, the loaders are usually packaged as *glycin-loaders*, and libglycin as *libglycin-2*. However, each loader binary could be also packaged as its own package.
 
 ### Example
 
@@ -29,49 +37,52 @@ let texture = image.next_frame().await?.texture();
 
 ## Limitations
 
-Glycin is based on technologies like memfds, unix sockets, and linux namespaces. It currently only works on Linux. An adoption to other unixoid systems could be possible without usage of the sandbox mechanism. Windows support is currently not planned and might not be feasible.
+Glycin sandboxing and modularity is based on technologies like memfds, unix sockets, and linux namespaces. Therefore, these features are only available on Linux. Other operating systems are supported by embedding the image loaders directly into the glycin/libglycin libraries. This happens automatically when building with a non-linux target.
 
 ## Supported Image Formats
 
-The following formats are supported by the glycin loaders provided in the [loaders](loaders) directory. You can learn more about the supported features for each format on the [glycin website](https://gnome.pages.gitlab.gnome.org/glycin/#supported-image-formats).
+The following formats are supported by the glycin image loaders provided in the [loaders](loaders) directory. You can learn more about the supported features for each format on the [glycin website](https://gnome.pages.gitlab.gnome.org/glycin/#supported-image-formats).
 
 | Format | Glycin Loader | Decoder |
 |-|-|-|
-| Animated PNG image  | glycin-image-rs |[png](https://crates.io/crates/png) (Rust) |
-| AVIF image  (.avif) | glycin-heif |[libheif](https://github.com/strukturag/libheif) (C++) |
-| Windows BMP image  (.bmp) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| GIF image  (.gif) | glycin-image-rs |[gif](https://crates.io/crates/gif) (Rust) |
-| HEIF image  (.heic) | glycin-heif |[libheif](https://github.com/strukturag/libheif) (C++) |
-| JPEG-2000 JP2 image  | glycin-image-rs |[hayro-jpeg2000](https://crates.io/crates/hayro-jpeg2000) (Rust) |
-| JPEG image  (.jpg) | glycin-image-rs |[zune-jpeg](https://crates.io/crates/zune-jpeg) (Rust) |
-| JPEG XL image  (.jxl) | glycin-jxl |[libjxl](https://github.com/libjxl/libjxl) (C++) |
-| PNG image  (.png) | glycin-image-rs |[png](https://crates.io/crates/png) (Rust) |
-| Quite OK Image Format  (.qoi) | glycin-image-rs |[qoi](https://crates.io/crates/qoi) (Rust) |
-| SVG image  | glycin-svg |[librsvg](https://gitlab.gnome.org/GNOME/librsvg) (C/Rust) |
-| Compressed SVG image  | glycin-svg |[librsvg](https://gitlab.gnome.org/GNOME/librsvg) (C/Rust) |
-| TIFF image  (.tiff) | glycin-image-rs |[tiff](https://crates.io/crates/tiff) (Rust) |
-| Windows icon  (.ico) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust), [bmp](https://crates.io/crates/bmp) (Rust), [png](https://crates.io/crates/png) (Rust) |
-| WebP image  (.webp) | glycin-image-rs |[image-webp](https://crates.io/crates/image-webp) (Rust) |
-| Adobe DNG negative  | glycin-raw | |
-| Canon CR2 raw image  | glycin-raw | |
-| DirectDraw surface  (.dds) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| image/x-epson-erf type  | glycin-raw | |
-| EXR image  (.exr) | glycin-image-rs |[exr](https://crates.io/crates/exr) (Rust) |
-| Minolta MRW raw image  | glycin-raw | |
-| Olympus ORF raw image  | glycin-raw | |
-| Panasonic raw image  | glycin-raw | |
-| Panasonic raw image  | glycin-raw | |
-| Pentax PEF raw image  | glycin-raw | |
-| PNM image  | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| PBM image  | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| PGM image  | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| PPM image  | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| image/x-qoi type  | glycin-image-rs |[qoi](https://crates.io/crates/qoi) (Rust) |
-| Sony SRF raw image  | glycin-raw | |
-| TGA image  (.tga) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
-| Windows cursor  | glycin-image-rs |[image](https://crates.io/crates/image) (Rust), [bmp](https://crates.io/crates/bmp) (Rust), [png](https://crates.io/crates/png) (Rust) |
-| XBM image  | glycin-image-rs |[image-extras](https://crates.io/crates/image-extras) (Rust) |
-| XPM image  | glycin-image-rs |[image-extras](https://crates.io/crates/image-extras) (Rust) |
+| Animated PNG image | glycin-image-rs |[png](https://crates.io/crates/png) (Rust) |
+| AVIF image (.avif) | glycin-heif |[libheif](https://github.com/strukturag/libheif) (C++) |
+| Windows BMP image (.bmp) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| GIF image (.gif) | glycin-image-rs |[gif](https://crates.io/crates/gif) (Rust) |
+| HEIF image (.heic) | glycin-heif |[libheif](https://github.com/strukturag/libheif) (C++) |
+| JPEG-2000 JP2 image | glycin-image-rs |[hayro-jpeg2000](https://crates.io/crates/hayro-jpeg2000) (Rust) |
+| JPEG image (.jpg) | glycin-image-rs |[zune-jpeg](https://crates.io/crates/zune-jpeg) (Rust) |
+| JPEG XL image (.jxl)² | glycin-jxl |[libjxl](https://github.com/libjxl/libjxl) (C++) |
+| PNG image (.png) | glycin-image-rs |[png](https://crates.io/crates/png) (Rust) |
+| Quite OK Image Format (.qoi) | glycin-image-rs |[qoi](https://crates.io/crates/qoi) (Rust) |
+| SVG image | glycin-svg |[librsvg](https://gitlab.gnome.org/GNOME/librsvg) (C/Rust) |
+| Compressed SVG image | glycin-svg |[librsvg](https://gitlab.gnome.org/GNOME/librsvg) (C/Rust) |
+| TIFF image (.tiff) | glycin-image-rs |[tiff](https://crates.io/crates/tiff) (Rust) |
+| Windows icon (.ico) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust), [bmp](https://crates.io/crates/bmp) (Rust), [png](https://crates.io/crates/png) (Rust) |
+| WebP image (.webp) | glycin-image-rs |[image-webp](https://crates.io/crates/image-webp) (Rust) |
+| Adobe DNG negative¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| Canon CR2 raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| DirectDraw surface (.dds) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| image/x-epson-erf type¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| EXR image (.exr) | glycin-image-rs |[exr](https://crates.io/crates/exr) (Rust) |
+| Minolta MRW raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| Olympus ORF raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| Panasonic raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| Panasonic raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| Pentax PEF raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| PNM image | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| PBM image | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| PGM image | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| PPM image | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| Sony SRF raw image¹³ | glycin-raw |[libopenraw](https://crates.io/crates/libopenraw) (Rust) |
+| TGA image (.tga) | glycin-image-rs |[image](https://crates.io/crates/image) (Rust) |
+| Windows cursor | glycin-image-rs |[image](https://crates.io/crates/image) (Rust), [bmp](https://crates.io/crates/bmp) (Rust), [png](https://crates.io/crates/png) (Rust) |
+| XBM image | glycin-image-rs |[image-extras](https://crates.io/crates/image-extras) (Rust) |
+| XPM image | glycin-image-rs |[image-extras](https://crates.io/crates/image-extras) (Rust) |
+
+1. Support for this format is still experimental the corresponding loader is not built by default
+2. The loader for this format depends on GPL-3.0-or-later licenced software
+3. The loader for this format depends on LGPL-3.0-or-later licenced software
 
 ## Image Loader Configuration
 
@@ -108,7 +119,7 @@ Not every new major version of the library has to break compatibility with the l
 
 ## Sandboxing and Inner Workings
 
-Glycin spawns one process per image file. The communication between glycin and the loader takes place via peer-to-peer D-Bus over a Unix socket.
+This section only applies to Linux. See [Limitations](#Limitations) for details. By default, glycin spawns one process per image loader. The loaders can handle multiple requests in parallel. Running loaders are terminated after not being used for 30 seconds. All these values can be configured. The communication between glycin and the loader takes place via peer-to-peer D-Bus over a Unix socket.
 
 Glycin supports a sandbox mechanism inside and outside of Flatpaks. Outside of Flatpaks, the following mechanisms are used: The image loader binary is spawned via `bwrap`. The bubblewrap configuration only allows for minimal interaction with the host system. Only necessary parts of the filesystem are mounted and only with read access. There is no direct network access. Environment variables are not passed to the sandbox. Before forking the process the memory usage is limited via calling `setrlimit` and syscalls are limited to an allow-list via seccomp filters.
 
@@ -118,27 +129,37 @@ The GFile content is streamed to the loader via a Unix socket. This way, loaders
 
 The loaders provide the texture data via a memfd that is sealed by glycin and then given as an mmap to GDK. For animations and SVGs the sandboxed process is kept alive for new frames or tiles as long as needed.
 
-For information on how to implement a loader, please consult the [`glycin-utils` docs](https://docs.rs/glycin-utils/).
+For information on how to implement a loaders, please consult the [`glycin-utils` docs](https://docs.rs/glycin-utils/).
 
 ## Building and Testing
 
 - The `-Dloaders` option allows to only build certain loaders.
 - The `-Dtest_skip_ext` option allows to skip certain image filename extensions during tests. The option `-Dtest_skip_ext=heic` might be needed if x265 is not available.
 - Running integration tests requires the glycin loaders to be installed. By default, `meson test` creates a separate installation against which the tests are run. This behavior can be changed by setting `-Dtest_skip_install=true`, requiring to manually calling `meson install` before running the tests.
-- The `glycin` crate has an example, `glycin-render` that will load the image passed as a parameter and render it as a PNG into `output.png` in the current directory.
 
 ## Packaging Status
 
 [![Packaging Status](https://repology.org/badge/vertical-allrepos/glycin.svg?exclude_unsupported=1&header=&minversion=2)](https://repology.org/project/glycin/versions)
 
-## Apps Using Glycin
+## Software Using Glycin
 
-- [Camera (Snapshot)](https://flathub.org/apps/org.gnome.Snapshot)
+### Apps
+
+- [Bazaar](https://flathub.org/apps/io.github.kolunmi.Bazaar)
+- [Camera (Snapshot)](https://apps.gnome.org/Snapshot/)
+- [Contact](https://apps.gnome.org/Contacts/)
 - [Fotema](https://flathub.org/apps/app.fotema.Fotema)
 - [Fractal](https://flathub.org/apps/org.gnome.Fractal)
 - [Identity](https://flathub.org/apps/org.gnome.gitlab.YaLTeR.Identity)
-- [Image Viewer (Loupe)](https://flathub.org/apps/org.gnome.Loupe)
+- [Image Viewer (Loupe)](https://apps.gnome.org/Loupe/)
+- [Nautilus](https://apps.gnome.org/Nautilus/)
+- [Robots](https://flathub.org/apps/org.gnome.Robots)
 - [Shortwave](https://flathub.org/apps/de.haeckerfelix.Shortwave)
+
+### Other
+
+- [Mutter](https://developer.gnome.org/components/#mutter)
+- [gdk-pixbuf](https://developer.gnome.org/components/#gdk-pixbuf)
 
 ## The Name
 

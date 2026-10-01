@@ -7,15 +7,16 @@ use std::sync::Arc;
 use gio::glib;
 use gio::prelude::*;
 
-use crate::config::{Config, ImageEditorConfig, ImageLoaderConfig};
+use crate::config::{Config, EditorConfig, LoaderConfig};
 #[cfg(feature = "external")]
 use crate::dbus::ZbusProxy;
 use crate::dbus::{EditorProxy, LoaderProxy};
+use crate::error::ErrorKind;
 #[cfg(feature = "external")]
 use crate::pool::{PooledProcess, UsageTracker};
 use crate::source::SourceTransmission;
 use crate::util::RunEnvironment;
-use crate::{Error, ErrorKind, MimeType, Pool, config};
+use crate::{Error, MimeType, Pool, config};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 /// Sandboxing mechanism for image loading and editing
@@ -28,6 +29,7 @@ pub enum SandboxMechanism {
 impl SandboxMechanism {
     pub async fn detect() -> Self {
         match RunEnvironment::cached().await {
+            RunEnvironment::SandboxForceDisabled => Self::NotSandboxed,
             RunEnvironment::FlatpakDevel => Self::NotSandboxed,
             RunEnvironment::Flatpak => Self::FlatpakSpawn,
             RunEnvironment::Host => Self::Bwrap,
@@ -84,6 +86,7 @@ impl SandboxSelector {
 pub enum ColorState {
     Srgb,
     Cicp(crate::Cicp),
+    IccProfile(Vec<u8>),
 }
 
 /// A version of an input stream that can be sent.
@@ -122,13 +125,17 @@ impl Source {
         }
     }
 
-    pub async fn to_stream(&self) -> Result<gio::InputStream, Error> {
+    pub async fn to_stream(&self, sync: bool) -> Result<gio::InputStream, Error> {
         match self {
-            Self::File(file) => file
-                .read_future(glib::Priority::DEFAULT)
-                .await
-                .map(|x| x.upcast())
-                .map_err(|e| ErrorKind::ImageSource(e).err()),
+            Self::File(file) => {
+                let read = if sync {
+                    file.read(gio::Cancellable::NONE)
+                } else {
+                    file.read_future(glib::Priority::DEFAULT).await
+                };
+                read.map(|x| x.upcast())
+                    .map_err(|e| ErrorKind::ImageSource(e).err())
+            }
             Self::Stream(stream) => Ok(stream.0.clone()),
             Self::TransferredStream => Err(ErrorKind::TransferredStream.into()),
         }
@@ -179,11 +186,11 @@ pub trait GetConfig {
     fn guess_mime_type(config: &Config, path: Option<&Path>, head: &[u8]) -> Option<MimeType>;
 }
 
-impl GetConfig for ImageLoaderConfig {
+impl GetConfig for LoaderConfig {
     fn config_entry<'a>(
         config: &'a Config,
         mime_type: &'a MimeType,
-    ) -> Result<&'a ImageLoaderConfig, Error> {
+    ) -> Result<&'a LoaderConfig, Error> {
         config.loader(mime_type)
     }
 
@@ -196,11 +203,11 @@ impl GetConfig for ImageLoaderConfig {
     }
 }
 
-impl GetConfig for ImageEditorConfig {
+impl GetConfig for EditorConfig {
     fn config_entry<'a>(
         config: &'a Config,
         mime_type: &'a MimeType,
-    ) -> Result<&'a ImageEditorConfig, Error> {
+    ) -> Result<&'a EditorConfig, Error> {
         config.editor(mime_type)
     }
 
@@ -222,10 +229,11 @@ impl<T: GetConfig + Clone> ProcessorContext<T, SourceTransmission> {
         source: Source,
         use_expose_base_dir: bool,
         sandbox_selector: &SandboxSelector,
+        sync: bool,
     ) -> Result<ProcessorContext<T, SourceTransmission>, Error> {
         let file = source.file();
 
-        let source_transmission = SourceTransmission::init(source).await?;
+        let source_transmission = SourceTransmission::init(source, sync).await?;
         let config = config::Config::cached().await;
 
         let mime_type = T::guess_mime_type(
@@ -283,7 +291,7 @@ impl<T: GetConfig + Clone> ProcessorContext<T, ()> {
     }
 }
 
-impl<S> ProcessorContext<ImageLoaderConfig, S> {
+impl<S> ProcessorContext<LoaderConfig, S> {
     pub async fn loader(
         self,
         pool: Arc<Pool>,
@@ -331,7 +339,7 @@ impl<S> ProcessorContext<ImageLoaderConfig, S> {
     }
 }
 
-impl<S> ProcessorContext<ImageEditorConfig, S> {
+impl<S> ProcessorContext<EditorConfig, S> {
     pub async fn editor(
         self,
         pool: Arc<Pool>,

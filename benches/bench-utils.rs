@@ -17,8 +17,8 @@ fn images() -> Vec<(MemoryFormat, PathBuf)> {
                 .unwrap(),
         ),
         (
-            MemoryFormat::R32g32b32Float,
-            img.take(Path::new("test-images/images/color/color.exr"))
+            MemoryFormat::R16g16b16,
+            img.take(Path::new("test-images/images/color/color-f16.exr"))
                 .unwrap(),
         ),
         (
@@ -68,9 +68,9 @@ fn convert_image_format(c: &mut Criterion) {
                             .unwrap()
                             .into_fungible()
                         },
-                        |frame| {
+                        |mut frame| {
                             glycin_utils::editing::change_memory_format(
-                                black_box(frame),
+                                black_box(&mut frame),
                                 black_box(target_format),
                             )
                             .unwrap();

@@ -39,15 +39,6 @@ impl EditorImplementation for ImgEditor {
     ) -> Result<glycin_utils::EncodedImage<B>, glycin_utils::ProcessError> {
         let frame = new_image.frames.remove(0);
 
-        let memory_format = (glycin_utils::MemoryFormatSelection::R8g8b8
-            | glycin_utils::MemoryFormatSelection::R8g8b8a8)
-            .best_format_for(frame.memory_format)
-            .internal_error()?;
-
-        let frame =
-            glycin_utils::editing::change_memory_format(frame.into_fungible(), memory_format)
-                .expected_error()?;
-
         let width = frame.width;
         let height = frame.height;
 
@@ -68,7 +59,7 @@ impl EditorImplementation for ImgEditor {
         }
 
         let plane = image.planes_mut().interleaved.internal_error()?;
-        let new_stride = width as usize * memory_format.n_bytes().usize();
+        let new_stride = width as usize * frame.memory_format.n_bytes().usize();
 
         for y in 0..height as usize {
             for x in 0..new_stride {

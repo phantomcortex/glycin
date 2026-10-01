@@ -3,19 +3,10 @@ use std::sync::OnceLock;
 use gio::glib;
 use glib::subclass::prelude::*;
 
+use super::{GlyColorMode, GlyFrameDetails};
 use crate::Frame;
 
 static_assertions::assert_impl_all!(GlyFrame: Send, Sync);
-
-#[derive(Debug, Copy, Clone)]
-#[cfg_attr(feature = "gobject", derive(gio::glib::Enum))]
-#[cfg_attr(feature = "gobject", enum_type(name = "GlyColorMode"))]
-#[repr(i32)]
-#[non_exhaustive]
-pub enum GlyColorMode {
-    Srgb,
-    Cicp,
-}
 
 #[derive(Clone, Debug, glib::Boxed)]
 #[boxed_type(name = "GlyCicp", nullable)]
@@ -30,7 +21,8 @@ pub struct GlyCicp {
 pub mod imp {
     use super::*;
 
-    #[derive(Default, Debug)]
+    #[derive(Default, Debug, glib::Properties)]
+    #[properties(wrapper_type = super::GlyFrame)]
     pub struct GlyFrame {
         pub(super) frame: OnceLock<Frame>,
     }
@@ -41,6 +33,7 @@ pub mod imp {
         type Type = super::GlyFrame;
     }
 
+    #[glib::derived_properties]
     impl ObjectImpl for GlyFrame {}
 }
 
@@ -64,6 +57,7 @@ impl GlyFrame {
         match self.frame().color_state() {
             crate::ColorState::Srgb => GlyColorMode::Srgb,
             crate::ColorState::Cicp(_) => GlyColorMode::Cicp,
+            crate::ColorState::IccProfile(_) => GlyColorMode::IccProfile,
         }
     }
 
@@ -73,5 +67,17 @@ impl GlyFrame {
         } else {
             None
         }
+    }
+
+    pub fn color_icc_profile(&self) -> Option<glib::Bytes> {
+        if let crate::ColorState::IccProfile(icc_profile) = self.frame().color_state() {
+            Some(glib::Bytes::from_owned(icc_profile.clone()))
+        } else {
+            None
+        }
+    }
+
+    pub fn details(&self) -> GlyFrameDetails {
+        GlyFrameDetails::new(self.frame().details())
     }
 }

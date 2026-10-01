@@ -1,20 +1,26 @@
+pub mod color_mode;
 pub mod creator;
 pub mod encoded_image;
 pub mod frame;
+pub mod frame_details;
 pub mod frame_request;
 pub mod image;
 pub mod loader;
 pub mod new_frame;
+pub mod pixel_density;
 
 use std::sync::OnceLock;
 
+pub use color_mode::GlyColorMode;
 pub use creator::GlyCreator;
 pub use encoded_image::GlyEncodedImage;
 pub use frame::{GlyCicp, GlyFrame};
+pub use frame_details::GlyFrameDetails;
 pub use frame_request::GlyFrameRequest;
 pub use image::GlyImage;
 pub use loader::GlyLoader;
-pub use new_frame::GlyNewFrame;
+pub use new_frame::{GlyNewFrame, GlyPhysicalDimensionUnit};
+pub use pixel_density::GlyPixelDensity;
 use tracing_subscriber::layer::*;
 use tracing_subscriber::util::*;
 
@@ -42,6 +48,7 @@ pub fn init() {
             .init();
 
         tracing::debug!("Initialized logging");
+        tracing::debug!("Glycin {}", env!("CARGO_PKG_VERSION"));
 
         async_global_executor::init_with_config(
             async_global_executor::GlobalExecutorConfig::default()

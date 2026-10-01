@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::time::Duration;
 
-use glycin_common::{MemoryFormat, MemoryFormatInfo};
+use glycin_common::{ColorProfilePreference, MemoryFormat, MemoryFormatInfo};
 use gufo_common::orientation::Orientation;
+use gufo_common::physical_dimension;
 #[cfg(feature = "external")]
 use zbus::zvariant::as_value::{self, optional};
 #[cfg(feature = "external")]
@@ -159,6 +160,7 @@ pub struct ImageDetails<B: ByteData> {
             default
         )
     )]
+    #[deprecated]
     pub dimensions_inch: Option<(f64, f64)>,
     #[cfg_attr(
         feature = "external",
@@ -225,6 +227,7 @@ impl<B: ByteData> ImageDetails<B> {
         Self {
             width,
             height,
+            #[allow(deprecated)]
             dimensions_inch: None,
             info_dimensions_text: None,
             info_format_name: None,
@@ -240,6 +243,7 @@ impl<B: ByteData> ImageDetails<B> {
         ImageDetails {
             width: self.width,
             height: self.height,
+            #[allow(deprecated)]
             dimensions_inch: self.dimensions_inch,
             info_format_name: self.info_format_name,
             info_dimensions_text: self.info_dimensions_text,
@@ -255,6 +259,7 @@ impl<B: ByteData> ImageDetails<B> {
         Ok(ImageDetails {
             width: self.width,
             height: self.height,
+            #[allow(deprecated)]
             dimensions_inch: self.dimensions_inch,
             info_format_name: self.info_format_name,
             info_dimensions_text: self.info_dimensions_text,
@@ -296,10 +301,13 @@ impl<B: ByteData> Default for FrameDetails<B> {
         Self {
             color_icc_profile: None,
             color_cicp: None,
+            color_profile_preference: None,
             info_bit_depth: None,
             info_alpha_channel: None,
             info_grayscale: None,
             n_frame: None,
+            pixel_density: None,
+            physical_size: None,
         }
     }
 }
@@ -453,6 +461,16 @@ pub struct FrameDetails<B: ByteData> {
         )
     )]
     pub color_cicp: Option<[u8; 4]>,
+    /// Which profile to use if ICC profile and CICP are defined
+    #[cfg_attr(
+        feature = "external",
+        serde(
+            with = "as_value::optional",
+            skip_serializing_if = "Option::is_none",
+            default
+        )
+    )]
+    pub color_profile_preference: Option<ColorProfilePreference>,
     /// Bit depth per channel
     ///
     /// Only set if it can differ for the format
@@ -498,6 +516,24 @@ pub struct FrameDetails<B: ByteData> {
         )
     )]
     pub n_frame: Option<u64>,
+    #[cfg_attr(
+        feature = "external",
+        serde(
+            with = "as_value::optional",
+            skip_serializing_if = "Option::is_none",
+            default
+        )
+    )]
+    pub pixel_density: Option<physical_dimension::PixelDensity>,
+    #[cfg_attr(
+        feature = "external",
+        serde(
+            with = "as_value::optional",
+            skip_serializing_if = "Option::is_none",
+            default
+        )
+    )]
+    pub physical_size: Option<physical_dimension::PhysicalSize>,
 }
 
 impl<B: ByteData> FrameDetails<B> {
@@ -505,10 +541,13 @@ impl<B: ByteData> FrameDetails<B> {
         FrameDetails {
             color_icc_profile: self.color_icc_profile.map(B::into_fungible),
             color_cicp: self.color_cicp,
+            color_profile_preference: self.color_profile_preference,
             info_bit_depth: self.info_bit_depth,
             info_alpha_channel: self.info_alpha_channel,
             info_grayscale: self.info_grayscale,
             n_frame: self.n_frame,
+            pixel_density: self.pixel_density,
+            physical_size: self.physical_size,
         }
     }
 
@@ -516,10 +555,13 @@ impl<B: ByteData> FrameDetails<B> {
         Ok(FrameDetails {
             color_icc_profile: self.color_icc_profile.map(B::into_other).transpose()?,
             color_cicp: self.color_cicp,
+            color_profile_preference: self.color_profile_preference,
             info_bit_depth: self.info_bit_depth,
             info_alpha_channel: self.info_alpha_channel,
             info_grayscale: self.info_grayscale,
             n_frame: self.n_frame,
+            pixel_density: self.pixel_density,
+            physical_size: self.physical_size,
         })
     }
 

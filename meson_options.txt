@@ -20,7 +20,7 @@ option(
 option(
   'glycin-loaders',
   type: 'boolean',
-  description: 'Build loaders',
+  description: 'Build loaders. This is will be overwritten with false on non-linux targets. The exact loaders to build is specified via the "loaders" option.',
 )
 
 option(
@@ -74,6 +74,13 @@ option(
   choices: ['error', 'warn', 'info', 'debug', 'trace'],
   value: 'warn',
   description: 'Output log messages of the specified level during tests.',
+)
+
+option(
+  'test_disable_sandbox',
+  type: 'boolean',
+  value: false,
+  description: 'Don\'t use any sandbox mechanism while running tests.',
 )
 
 # libglycin

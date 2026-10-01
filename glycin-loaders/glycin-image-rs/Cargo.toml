@@ -1,7 +1,6 @@
 [package]
 name = "glycin-image-rs"
-publish = false
-version = "2.1.1"
+version.workspace = true
 authors.workspace = true
 description.workspace = true
 license.workspace = true
@@ -24,7 +23,7 @@ glycin-utils = { workspace = true, features = [
 ] }
 gufo-common.workspace = true
 gufo-exif.workspace = true
-gufo.workspace = true
+gufo = { workspace = true, features = ["jpeg", "png", "tiff", "webp"] }
 gufo-jpeg = { workspace = true, features = ["encoder"] }
 image = { workspace = true, features = [
     "bmp",
@@ -47,3 +46,7 @@ jpeg-encoder = "0.7.0"
 zune-jpeg = "0.5.11"
 image-extras.workspace = true
 hayro-jpeg2000 = { workspace = true, features = ["image"] }
+exr = "1.74.0"
+moxcms = "0.8.1"
+tiff = "0.11.3"
+bytemuck.workspace = true

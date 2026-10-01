@@ -83,6 +83,18 @@ pub unsafe extern "C" fn gly_loader_set_apply_transformations(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn gly_loader_set_color_convert_icc_srgb(
+    loader: *mut GlyLoader,
+    convert: c_int,
+) {
+    unsafe {
+        let obj = gobject::GlyLoader::from_glib_ptr_borrow(&loader);
+
+        obj.set_color_convert_icc_srgb(convert != 0);
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn gly_loader_load(
     loader: *mut GlyLoader,
     g_error: *mut *mut GError,
@@ -116,9 +128,9 @@ pub unsafe extern "C" fn gly_loader_load_async(
 
         let cancel_signal = if let Some(cancellable) = &cancellable {
             cancellable.connect_cancelled(glib::clone!(
-                #[weak]
-                obj,
-                move |_| obj.cancellable().cancel()
+                #[weak(rename_to = cancellable)]
+                obj.cancellable(),
+                move |_| cancellable.cancel()
             ))
         } else {
             None

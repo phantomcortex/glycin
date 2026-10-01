@@ -11,11 +11,14 @@ pub trait MemoryFormatInfo: Sized {
 
 gufo_common::maybe_convertible_enum!(
     #[repr(i32)]
-    #[derive(Deserialize, Serialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Deserialize, Serialize, Type, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(feature = "gobject", derive(glib::Enum))]
     #[cfg_attr(feature = "gobject", enum_type(name = "GlyMemoryFormat"))]
     #[zvariant(signature = "u")]
     /// Describes the formats the image data can have.
+    ///
+    /// Orderings like "RGB" are independent of the systems endianness. Single
+    /// channels like "R16" ([`u16`]) follow the endianness of the system.
     pub enum MemoryFormat {
         B8g8r8a8Premultiplied = 0,
         A8r8g8b8Premultiplied = 1,
@@ -101,6 +104,32 @@ impl MemoryFormatInfo for MemoryFormat {
 }
 
 impl MemoryFormat {
+    pub const ALL: &[Self] = &[
+        Self::B8g8r8a8Premultiplied,
+        Self::A8r8g8b8Premultiplied,
+        Self::R8g8b8a8Premultiplied,
+        Self::B8g8r8a8,
+        Self::A8r8g8b8,
+        Self::R8g8b8a8,
+        Self::A8b8g8r8,
+        Self::R8g8b8,
+        Self::B8g8r8,
+        Self::R16g16b16,
+        Self::R16g16b16a16Premultiplied,
+        Self::R16g16b16a16,
+        Self::R16g16b16Float,
+        Self::R16g16b16a16Float,
+        Self::R32g32b32Float,
+        Self::R32g32b32a32FloatPremultiplied,
+        Self::R32g32b32a32Float,
+        Self::G8a8Premultiplied,
+        Self::G8a8,
+        Self::G8,
+        Self::G16a16Premultiplied,
+        Self::G16a16,
+        Self::G16,
+    ];
+
     pub const fn channel_type(self) -> ChannelType {
         match self {
             MemoryFormat::B8g8r8a8Premultiplied
@@ -355,6 +384,63 @@ impl MemoryFormat {
             for i in 0..target_channel_size {
                 target[n * target_channel_size + i] = bytes[i];
             }
+        }
+    }
+
+    pub fn try_from_str(s: &str) -> Option<Self> {
+        Some(match s {
+            "B8g8r8a8Premultiplied" => Self::B8g8r8a8Premultiplied,
+            "A8r8g8b8Premultiplied" => Self::A8r8g8b8Premultiplied,
+            "R8g8b8a8Premultiplied" => Self::R8g8b8a8Premultiplied,
+            "B8g8r8a8" => Self::B8g8r8a8,
+            "A8r8g8b8" => Self::A8r8g8b8,
+            "R8g8b8a8" => Self::R8g8b8a8,
+            "A8b8g8r8" => Self::A8b8g8r8,
+            "R8g8b8" => Self::R8g8b8,
+            "B8g8r8" => Self::B8g8r8,
+            "R16g16b16" => Self::R16g16b16,
+            "R16g16b16a16Premultiplied" => Self::R16g16b16a16Premultiplied,
+            "R16g16b16a16" => Self::R16g16b16a16,
+            "R16g16b16Float" => Self::R16g16b16Float,
+            "R16g16b16a16Float" => Self::R16g16b16a16Float,
+            "R32g32b32Float" => Self::R32g32b32Float,
+            "R32g32b32a32FloatPremultiplied" => Self::R32g32b32a32FloatPremultiplied,
+            "R32g32b32a32Float" => Self::R32g32b32a32Float,
+            "G8a8Premultiplied" => Self::G8a8Premultiplied,
+            "G8a8" => Self::G8a8,
+            "G8" => Self::G8,
+            "G16a16Premultiplied" => Self::G16a16Premultiplied,
+            "G16a16" => Self::G16a16,
+            "G16" => Self::G16,
+            _ => return None,
+        })
+    }
+
+    pub const fn display(&self) -> &'static str {
+        match self {
+            Self::B8g8r8a8Premultiplied => "BGRA8 Premultiplied",
+            Self::A8r8g8b8Premultiplied => "ARGB8 Premultiplied",
+            Self::R8g8b8a8Premultiplied => "RGBA8 Premultiplied",
+            Self::B8g8r8a8 => "BGRA8",
+            Self::A8r8g8b8 => "ARGB8",
+            Self::R8g8b8a8 => "RGBA8",
+            Self::A8b8g8r8 => "ABGR8",
+            Self::R8g8b8 => "RGB8",
+            Self::B8g8r8 => "BGR8",
+            Self::R16g16b16 => "RGB16",
+            Self::R16g16b16a16Premultiplied => "RGBA16 Premultiplied",
+            Self::R16g16b16a16 => "RGBA16",
+            Self::R16g16b16Float => "RGB16Float",
+            Self::R16g16b16a16Float => "RGBA16Float",
+            Self::R32g32b32Float => "RGB32Float",
+            Self::R32g32b32a32FloatPremultiplied => "RGBA32Float Premultiplied",
+            Self::R32g32b32a32Float => "RGBA32Float",
+            Self::G8a8Premultiplied => "GA8 Premultiplied",
+            Self::G8a8 => "GA8",
+            Self::G8 => "G8",
+            Self::G16a16Premultiplied => "GA16 Premultiplied",
+            Self::G16a16 => "GA16",
+            Self::G16 => "G16",
         }
     }
 }

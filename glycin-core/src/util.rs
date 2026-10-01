@@ -8,11 +8,11 @@ use gio::prelude::CancellableExtManual;
 #[cfg(feature = "gdk4")]
 use glycin_utils::MemoryFormat;
 
-#[cfg(feature = "gdk4")]
-use crate::ColorState;
-use crate::ErrorKind;
+use crate::error::ErrorKind;
 #[cfg(feature = "external")]
 use crate::sandbox::Sandbox;
+#[cfg(feature = "gdk4")]
+use crate::{ColorState, Error};
 
 pub trait ShortcutErrorFuture<T, E>: Future<Output = Result<T, crate::Error>> + Sized
 where
@@ -43,7 +43,7 @@ pub trait CancellableFuture<T>: Future<Output = Result<T, crate::Error>> + Sized
         let self_ = std::pin::pin!(self);
         let either = futures_util::future::select(cancellable.future(), self_).await;
         match either {
-            futures_util::future::Either::Left(_) => Err(crate::ErrorKind::Canceled(None).err()),
+            futures_util::future::Either::Left(_) => Err(ErrorKind::Canceled(None).err()),
             futures_util::future::Either::Right((res, _)) => res,
         }
     }
@@ -57,7 +57,7 @@ pub trait TimeoutFuture<T>: Future<Output = Result<T, crate::Error>> + Sized {
         let timeout_ = std::pin::pin!(timeout_future(timeout));
         let either = futures_util::future::select(timeout_, self_).await;
         match either {
-            futures_util::future::Either::Left(_) => Err(crate::ErrorKind::Timeout(timeout).err()),
+            futures_util::future::Either::Left(_) => Err(ErrorKind::Timeout(timeout).err()),
             futures_util::future::Either::Right((res, _)) => res,
         }
     }
@@ -117,14 +117,19 @@ pub fn gdk_color_state(format: &ColorState) -> Result<gdk::ColorState, crate::Er
 
             Ok(cicp_params.build_color_state()?)
         }
+        ColorState::IccProfile(_) => Err(Error::other(
+            "GTK 4 doesn't support ICC profiles in color states yet. Set Loader::color_convert_icc_srgb to true to avoid this error.",
+        )),
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum RunEnvironment {
+    /// Sandbox force disabled
+    SandboxForceDisabled,
     /// Not inside Flatpak
     Host,
-
+    /// Not inside Flatpak but bwrap doesn't work
     HostBwrapSyscallsBlocked,
     /// Inside Flatpak
     Flatpak,
@@ -142,13 +147,26 @@ impl RunEnvironment {
         if let Some(result) = *run_environment {
             result
         } else {
-            let run_env = if let Some(devel) = flatpak_devel().await {
+            let run_env = if std::env::var("GLYCIN_DISABLE_SANDBOX").as_deref()
+                == Ok("i-know-the-risks")
+            {
+                eprintln!(
+                    "WARNING: Glycin running without sandbox. Force disabled via environment variable."
+                );
+                Self::SandboxForceDisabled
+            } else if let Some(devel) = flatpak_devel().await {
                 if devel {
+                    eprintln!(
+                        "WARNING: Glycin running without sandbox. Disabled due to Flatpak development environment."
+                    );
                     Self::FlatpakDevel
                 } else {
                     Self::Flatpak
                 }
             } else if Sandbox::check_bwrap_syscalls_blocked().await {
+                eprintln!(
+                    "WARNING: Glycin running without sandbox. Bubblewrap (bwrap) doesn't work in the environment."
+                );
                 Self::HostBwrapSyscallsBlocked
             } else {
                 Self::Host
@@ -188,14 +206,6 @@ async fn flatpak_devel() -> Option<bool> {
     Some(flatpak_builder && name.ends_with("Devel"))
 }
 
-pub async fn spawn_blocking<F: FnOnce() -> T + Send + 'static, T: Send + 'static>(
-    f: F,
-) -> Result<T, crate::Error> {
-    gio::spawn_blocking(f)
-        .await
-        .map_err(|e| ErrorKind::panic(e).err())
-}
-
 #[cfg(feature = "async-io")]
 pub use async_io_utils::*;
 #[cfg(feature = "tokio")]
@@ -204,6 +214,17 @@ pub use tokio_utils::*;
 #[cfg(feature = "async-io")]
 mod async_io_utils {
     use super::*;
+
+    pub async fn spawn_blocking<F: FnOnce() -> T + Send + 'static, T: Send + 'static>(
+        f: F,
+    ) -> Result<T, crate::Error> {
+        Ok(blocking::unblock(f).await)
+    }
+
+    #[cfg(feature = "gobject")]
+    pub fn block_on<F: Future>(f: F) -> F::Output {
+        async_io::block_on(f)
+    }
 
     #[cfg(feature = "external")]
     pub type Task<T> = async_task::Task<T>;
@@ -266,6 +287,19 @@ mod async_io_utils {
 #[cfg(feature = "tokio")]
 mod tokio_utils {
     use super::*;
+
+    pub async fn spawn_blocking<F: FnOnce() -> T + Send + 'static, T: Send + 'static>(
+        f: F,
+    ) -> Result<T, crate::Error> {
+        tokio::task::spawn_blocking(f)
+            .await
+            .map_err(|x| crate::Error::other(&x.to_string()))
+    }
+
+    #[cfg(feature = "gobject")]
+    pub fn block_on<F: Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
 
     #[cfg(feature = "external")]
     pub type Task<T> = tokio::task::JoinHandle<T>;

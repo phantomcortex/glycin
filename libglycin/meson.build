@@ -3,11 +3,18 @@ if not get_option('libglycin') and not get_option('libglycin-gtk4')
 endif
 
 libglycin_deps = [
-    dependency('fontconfig', version: fontconfig_req),
     dependency('gio-2.0', version: gio_req),
-    dependency('libseccomp', version: seccomp_req),
-    dependency('lcms2', version: lcms2_req),
 ]
+
+if host_machine.system() == 'linux'
+    libglycin_deps += [
+        dependency('fontconfig', version: fontconfig_req),
+        dependency(
+            'libseccomp',
+            version: seccomp_req,
+        ),
+    ]
+endif
 
 pkg = import('pkgconfig')
 gnome = import('gnome')
@@ -17,7 +24,7 @@ cargo_options = [
     '--target-dir', cargo_target_dir,
     '--profile', cargo_profile,
     '--manifest-path', manifest,
-]
+] + cargo_target_args
 
 cargo_env_module = cargo_env
 
@@ -53,6 +60,18 @@ endif
 
 global_libglycin_gir = 'non-existent'
 
+cc = meson.get_compiler('c')
+if host_machine.system() == 'darwin'
+    lib_ext = 'dylib'
+elif host_machine.system() == 'windows'
+    lib_ext = 'dll'
+else
+    lib_ext = 'so'
+endif
+
+windows_msvc = host_machine.system() == 'windows' and cc.get_argument_syntax() == 'msvc'
+windows_gnu = host_machine.system() == 'windows' and cc.get_argument_syntax() == 'gcc'
+
 foreach package : packages
     suffix = package['suffix']
     namespace_suffix = package['namespace_suffix']
@@ -72,7 +91,21 @@ foreach package : packages
         endif
     endif
 
-    cargo_output = cargo_target_dir / rust_target / f'libglycin@suffix@.so'.replace('-', '_')
+    libglycin_target_name = f'glycin@suffix@-2'
+
+    win_dll_name = f'@libglycin_target_name@-0.dll'
+    message(cargo_artifact_dir / rust_target / win_dll_name)
+
+    if windows_msvc
+        win_dll_name = f'@libglycin_target_name@-0.dll'
+        win_implib_name = f'@libglycin_target_name@.lib'
+        cargo_output = cargo_artifact_dir / rust_target / win_dll_name
+        cargo_implib_output = cargo_artifact_dir / rust_target / win_implib_name
+    elif windows_gnu
+        cargo_output = cargo_artifact_dir / rust_target / f'glycin@suffix@.dll'
+    else
+        cargo_output = cargo_artifact_dir / rust_target / (f'libglycin@suffix@'.replace('-', '_') + '.' + lib_ext)
+    endif
 
     # Build library with Rust
     libglycin = custom_target(
@@ -83,7 +116,12 @@ foreach package : packages
         output: f'Meson-does-not-support-sub-dir-output@suffix@',
         console: true,
         env: cargo_env_module,
-        command: [cargo_bin, 'build', cargo_options, '-p', f'libglycin@suffix@'],
+        command: [
+            cargo_bin,
+            'build',
+            cargo_options,
+            '-p', f'libglycin@suffix@',
+        ],
     )
 
     # Make the build result available to meson. We cannot use the "output"
@@ -103,12 +141,13 @@ foreach package : packages
 
     # We need a shim "lib" object to pass to "generate_gir" later
     libglycin_shim = library(
-        f'glycin@suffix@-2',
+        libglycin_target_name,
         f'include/glycin@suffix@.h',
         soversion: '0',
         link_with: link_with,
         include_directories: 'include/',
         dependencies: deps,
+        link_args: windows_msvc ? ['/NOENTRY'] : [],
         # Mark dirty for "generate_gir" if the header or the rust generated .so changes
         link_depends: [
             # For unknown reasons the header triggers repeated gir regenerates until something else changes
@@ -140,24 +179,34 @@ foreach package : packages
         ],
     )
 
+    copy_deps = [libglycin_copy_library]
+
+    if windows_msvc
+        shim_import_lib = meson.current_build_dir() / win_implib_name
+        libglycin_copy_import_lib = custom_target(
+            f'libglycin@suffix@-copy-import-lib',
+            depends: libglycin_shim,
+            build_always_stale: true,
+            build_by_default: true,
+            output: f'would-overlap-with-import-library()@suffix@',
+            command: [
+                'cp',
+                '-a', cargo_implib_output,
+                shim_import_lib,
+            ],
+        )
+        copy_deps += libglycin_copy_import_lib
+    endif
+
     install_headers(f'include/glycin@suffix@.h', subdir: f'glycin@suffix@-2')
 
     # Generate a dependency such that the following targets only happen
-    # after the .so file has been copied to the correct place
+    # after the .so/.lib file has been copied to the correct place
     libglycin_copy_library_as_dep = declare_dependency(
-        sources: libglycin_copy_library,
+        sources: copy_deps,
     )
 
-    if suffix == ''
-        version = run_command(crate_version_bin, f'libglycin@suffix@', 'gnome', check: true).stdout()
-    else
-        version = run_command(
-            crate_version_bin,
-            f'libglycin/libglycin@suffix@',
-            'gnome',
-            check: true,
-        ).stdout()
-    endif
+    version = meson.project_version()
 
     # Generate .pc file
     pkg.generate(
@@ -229,6 +278,7 @@ foreach package : packages
             build_by_default: true,
             install: true,
             install_dir: datadir / 'doc',
+            env: test_env,
         )
     endif
 

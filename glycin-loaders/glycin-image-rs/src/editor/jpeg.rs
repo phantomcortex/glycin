@@ -2,13 +2,78 @@ use std::io::{Cursor, Read};
 
 use editing::EditingFrame;
 use glycin_utils::*;
+use gufo_common::field;
 use gufo_common::orientation::Orientation;
+use gufo_common::physical_dimension::PhysicalDimensionUnit;
 use gufo_jpeg::Jpeg;
 use zune_jpeg::zune_core::options::DecoderOptions;
 use zune_jpeg::zune_core::{self};
 
 pub struct EditJpeg {
     buf: Vec<u8>,
+}
+
+pub fn create(
+    frame: Frame<FungibleMemory>,
+    encoding_options: EncodingOptions,
+    icc_profile: Option<Vec<u8>>,
+) -> Result<Vec<u8>, ProcessError> {
+    let mut out_buf = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(
+        &mut out_buf,
+        encoding_options
+            .quality
+            .map(|x| u8::min(x, 100))
+            .unwrap_or(90),
+    );
+
+    let color_type = match frame.memory_format {
+        MemoryFormat::R8g8b8 => jpeg_encoder::ColorType::Rgb,
+        MemoryFormat::G8 => jpeg_encoder::ColorType::Luma,
+        format => {
+            return Err(ProcessError::expected(&format!(
+                "Unsupported memory format: {format:?}"
+            )));
+        }
+    };
+
+    if let Some(icc_profile) = icc_profile {
+        let _ = encoder.add_icc_profile(&icc_profile);
+    }
+
+    if let Some(pixel_density) = frame.details.pixel_density {
+        let (unit, unit_jpeg) = match pixel_density.x().unit() {
+            PhysicalDimensionUnit::Centimeter => (
+                PhysicalDimensionUnit::Centimeter,
+                jpeg_encoder::PixelDensityUnit::Centimeters,
+            ),
+            _ => (
+                PhysicalDimensionUnit::Inch,
+                jpeg_encoder::PixelDensityUnit::Inches,
+            ),
+        };
+
+        let pixel_density = pixel_density.convert(unit);
+
+        encoder.set_density(jpeg_encoder::PixelDensity {
+            density: (
+                pixel_density.x().value().round() as u16,
+                pixel_density.y().value().round() as u16,
+            ),
+            unit: unit_jpeg,
+        });
+    }
+
+    encoder
+        .encode(
+            &frame.texture,
+            frame.width as u16,
+            frame.height as u16,
+            color_type,
+        )
+        .expected_error()?;
+
+    Ok(out_buf)
 }
 
 pub fn load<S: Read>(mut stream: S) -> Result<EditJpeg, glycin_utils::ProcessError> {
@@ -74,6 +139,11 @@ fn apply_non_sparse<B: ByteData>(
 
     // Find out what the used color encoding/model is
     let mut decoder = zune_jpeg::JpegDecoder::new(Cursor::new(&mut buf));
+    let options = zune_core::options::DecoderOptions::new_fast()
+        .set_max_width(usize::MAX)
+        .set_max_height(usize::MAX);
+    decoder.set_options(options);
+
     decoder.decode_headers().expected_error()?;
     let colorspace = decoder.input_colorspace().expected_error()?;
     drop(decoder);
@@ -163,21 +233,30 @@ fn rotate_sparse(
         .collect::<Vec<_>>();
     let mut exif_segment = exif_segment.iter();
 
-    if let (Some(exif_data), Some(exif_segment_data_pos)) = (exif_data.next(), exif_segment.next())
+    if let (Some(mut exif_data), Some(exif_segment_data_pos)) =
+        (exif_data.next(), exif_segment.next())
     {
-        let mut exif = gufo_exif::internal::ExifRaw::new(exif_data.to_vec());
-        exif.decode().expected_error()?;
+        let mut exif =
+            gufo_exif::ExifMutBorrowed::for_mut_slice(&mut exif_data).expected_error()?;
 
-        if let Some(entry) = exif.lookup_entry(gufo_common::field::Orientation) {
-            let pos = exif_segment_data_pos
-                + entry.value_offset_position() as usize
-                + gufo::jpeg::EXIF_IDENTIFIER_STRING.len();
+        let diff = exif
+            .update_entry_diff(
+                field::Orientation.into(),
+                gufo_exif::Typed::Short(vec![orientation as u16]),
+            )
+            .expected_error()?;
 
-            return Ok(Some(ByteChanges::from_slice(&[(
-                pos as u64,
-                orientation as u8,
-            )])));
+        let mut byte_changes = Vec::new();
+        for (pos, value) in diff {
+            byte_changes.push((
+                gufo::jpeg::EXIF_IDENTIFIER_STRING.len() as u64
+                    + *exif_segment_data_pos as u64
+                    + pos as u64,
+                value,
+            ));
         }
+
+        return Ok(Some(ByteChanges::from_slice(byte_changes.as_slice())));
     }
 
     Ok(None)

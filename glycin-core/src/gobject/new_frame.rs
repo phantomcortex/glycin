@@ -1,18 +1,33 @@
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use gio::glib;
 use glib::prelude::*;
 use glib::subclass::prelude::*;
 use glycin_utils::MemoryFormat;
+use gufo_common::physical_dimension::PixelDensity;
 
 use super::init;
+use crate::gobject::GlyPixelDensity;
 
 static_assertions::assert_impl_all!(GlyNewFrame: Send, Sync);
 
+#[derive(Debug, Copy, Clone, gio::glib::Enum, Default)]
+#[enum_type(name = "GlyPhysicalDimensionUnit")]
+#[repr(i32)]
+#[non_exhaustive]
+pub enum GlyPhysicalDimensionUnit {
+    #[default]
+    Inch = 1,
+    /// 1/6 inch
+    Pica = 2,
+    /// 1/72 inch
+    Point = 3,
+    Meter = 4,
+    Centimeter = 5,
+    Millimeter = 6,
+}
+
 pub mod imp {
-
-    use std::sync::Mutex;
-
     use super::*;
 
     #[derive(Debug, Default, glib::Properties)]
@@ -31,6 +46,8 @@ pub mod imp {
 
         #[property(get, set, nullable)]
         color_icc_profile: Mutex<Option<glib::Bytes>>,
+
+        pub(crate) pixel_density: Mutex<Option<PixelDensity>>,
     }
 
     #[glib::object_subclass]
@@ -71,6 +88,11 @@ impl GlyNewFrame {
             .build()
     }
 
+    pub fn set_pixel_density(&self, pixel_density: Option<GlyPixelDensity>) {
+        *self.imp().pixel_density.lock().unwrap() =
+            pixel_density.map(|x| x.inner().to_owned().unwrap());
+    }
+
     pub async fn build(&self, creator: &mut crate::Creator) -> Result<(), crate::Error> {
         let frame = if self.stride() == 0 {
             creator.add_frame(
@@ -89,7 +111,9 @@ impl GlyNewFrame {
             )?
         };
 
+        // TODO: Errors here should be handled earlier
         frame.set_color_icc_profile(self.color_icc_profile().map(|x| x.into_data().to_vec()))?;
+        frame.set_pixel_density(self.imp().pixel_density.lock().unwrap().clone())?;
 
         Ok(())
     }
